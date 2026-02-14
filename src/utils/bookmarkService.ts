@@ -171,3 +171,33 @@ export const searchBookmarks = async (query: string): Promise<BookmarkNode[]> =>
     }
     return Promise.resolve([]);
 }
+
+export const createOrganizedBookmarks = async (clusters: { name?: string; items: { url: string; title: string }[] }[]): Promise<void> => {
+    if (typeof chrome === 'undefined' || !chrome.bookmarks) return;
+
+    // 1. Create Root Folder
+    const root = await new Promise<chrome.bookmarks.BookmarkTreeNode>((resolve) => {
+        chrome.bookmarks.create({ title: `Twin Marks AI Organized (${new Date().toLocaleDateString()})` }, (node) => resolve(node));
+    });
+
+    if (!root) return;
+
+    // 2. Create Clusters
+    for (const cluster of clusters) {
+        const folderName = cluster.name || 'Untitled Category';
+        const folder = await new Promise<chrome.bookmarks.BookmarkTreeNode>((resolve) => {
+            chrome.bookmarks.create({ parentId: root.id, title: folderName }, (node) => resolve(node));
+        });
+
+        // 3. Create Bookmarks
+        for (const item of cluster.items) {
+            await new Promise((resolve) => {
+                chrome.bookmarks.create({
+                    parentId: folder.id,
+                    title: item.title,
+                    url: item.url
+                }, () => resolve(true));
+            });
+        }
+    }
+};

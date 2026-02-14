@@ -1,0 +1,30 @@
+{
+  "manifest_version": 3,
+  "name": "Twin Marks AI",
+  "version": "1.1.0",
+  "description": "AI-powered dual-pane bookmark manager with semantic search.",
+  "permissions": [
+    "bookmarks",
+    "tabs",
+    "contextMenus",
+    "storage",
+    "scripting",
+    "activeTab"
+  ],
+  "background": {
+    "service_worker": "src/background/index.ts",
+    "type": "module"
+  },
+  "action": {},
+  "icons": {
+    "16": "public/icon16.png",
+    "48": "public/icon48.png",
+    "128": "public/icon128.png"
+  },
+  "web_accessible_resources": [
+    {
+      "resources": ["assets/*", "public/*"],
+      "matches": ["<all_urls>"]
+    }
+  ]
+}

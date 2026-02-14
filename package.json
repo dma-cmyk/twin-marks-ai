@@ -10,14 +10,20 @@
     "preview": "vite preview"
   },
   "dependencies": {
+    "@google/generative-ai": "^0.24.1",
     "clsx": "^2.1.1",
+    "idb": "^8.0.3",
     "lucide-react": "^0.563.0",
+    "ml-distance": "^4.0.1",
+    "ml-kmeans": "^7.0.0",
     "react": "^19.2.0",
     "react-dom": "^19.2.0",
+    "react-force-graph-2d": "^1.29.1",
     "react-resizable-panels": "^4.6.2",
     "tailwind-merge": "^3.4.0"
   },
   "devDependencies": {
+    "@crxjs/vite-plugin": "^2.0.0-beta.33",
     "@eslint/js": "^9.39.1",
     "@tailwindcss/postcss": "^4.1.18",
     "@types/chrome": "^0.1.36",
