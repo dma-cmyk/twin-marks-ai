@@ -476,8 +476,8 @@ export const NetworkGraph: React.FC<NetworkGraphProps> = ({ onNodeClick, classNa
             />
         )}
         
-        <div className="absolute top-4 right-4 pointer-events-none">
-            <div className="bg-slate-900/80 backdrop-blur px-3 py-1.5 rounded-lg border border-purple-500/30 text-[10px] text-purple-200 shadow-lg shadow-purple-900/20">
+        <div className="absolute bottom-16 right-4 pointer-events-none text-right">
+            <div className="bg-slate-900/80 backdrop-blur px-3 py-1.5 rounded-lg border border-purple-500/30 text-[10px] text-purple-200 shadow-lg shadow-purple-900/20 inline-block">
                 星: {data.nodes.length} | 星座: {data.links.length}
             </div>
         </div>

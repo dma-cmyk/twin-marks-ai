@@ -11,7 +11,9 @@
   },
   "dependencies": {
     "@google/generative-ai": "^0.24.1",
+    "@types/three": "^0.182.0",
     "clsx": "^2.1.1",
+    "defuddle": "^0.7.0",
     "idb": "^8.0.3",
     "lucide-react": "^0.563.0",
     "ml-distance": "^4.0.1",
@@ -19,8 +21,11 @@
     "react": "^19.2.0",
     "react-dom": "^19.2.0",
     "react-force-graph-2d": "^1.29.1",
+    "react-force-graph-3d": "^1.29.1",
     "react-resizable-panels": "^4.6.2",
-    "tailwind-merge": "^3.4.0"
+    "tailwind-merge": "^3.4.0",
+    "three": "^0.182.0",
+    "turndown": "^7.2.2"
   },
   "devDependencies": {
     "@crxjs/vite-plugin": "^2.0.0-beta.33",
@@ -30,6 +35,7 @@
     "@types/node": "^24.10.1",
     "@types/react": "^19.2.7",
     "@types/react-dom": "^19.2.3",
+    "@types/turndown": "^5.0.6",
     "@vitejs/plugin-react": "^5.1.1",
     "autoprefixer": "^10.4.24",
     "eslint": "^9.39.1",

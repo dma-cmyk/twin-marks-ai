@@ -412,9 +412,13 @@ export const BookmarkList: React.FC<BookmarkListProps> = ({ folderId, onNavigate
                       : 'hover:bg-slate-800 border-transparent hover:border-slate-700' // Default hover
                   )
               }`}
-            onClick={() => {
+            onClick={(e) => {
               if (node.url) {
                 onSelectUrl(node.url);
+                // AI検索の場合のみ新しいタブで開く
+                if (viewMode === 'search') {
+                  handleOpenInNewTab(e, node.url);
+                }
               } else {
                 onNavigate(node.id);
               }

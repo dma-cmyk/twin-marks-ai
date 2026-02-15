@@ -2,11 +2,12 @@ import { useState, useEffect } from 'react';
 import { BookmarkList } from './components/BookmarkList';
 import { RelatedLinksList } from './components/RelatedLinksList';
 import { SettingsModal } from './components/SettingsModal';
-import { VectorManager } from './components/VectorManager';
 import { NetworkGraph } from './components/NetworkGraph';
+import { NetworkGraph3D } from './components/NetworkGraph3D';
+import { SavedPages } from './components/SavedPages';
 import { AutoOrganizeModal } from './components/AutoOrganizeModal'; // Import
 import { getTree } from './utils/bookmarkService';
-import { ExternalLink, Layout, Maximize2, Zap, Settings, BrainCircuit, Loader2, Network, List, FolderOutput } from 'lucide-react'; // Import FolderOutput
+import { ExternalLink, Layout, Maximize2, Zap, Settings, BrainCircuit, Loader2, Network, List, FolderOutput, Box, BookmarkCheck } from 'lucide-react'; // Import List and FolderOutput
 import { Panel, Group as PanelGroup, Separator as PanelResizeHandle } from 'react-resizable-panels';
 
 function App() {
@@ -15,8 +16,8 @@ function App() {
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [isOrganizeOpen, setIsOrganizeOpen] = useState(false); // New state
-  const [activeTab, setActiveTab] = useState<'explorer' | 'ai'>('explorer');
-  const [aiViewMode, setAiViewMode] = useState<'list' | 'graph'>('list');
+  const [activeTab, setActiveTab] = useState<'explorer' | 'ai' | 'saved_pages'>('explorer');
+  const [aiViewMode, setAiViewMode] = useState<'list' | 'graph' | 'graph3d'>('list');
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [analyzingTitle, setAnalyzingTitle] = useState('');
   
@@ -89,31 +90,41 @@ function App() {
         </div>
         
         {/* Main Tab Navigation */}
-        <div className="flex items-center bg-slate-950 p-1 rounded-lg border border-slate-800 ml-8">
-            <button
-                onClick={() => setActiveTab('explorer')}
-                className={`flex items-center gap-2 px-4 py-1.5 rounded-md text-sm font-medium transition-all ${
-                    activeTab === 'explorer' 
-                    ? 'bg-slate-800 text-blue-400 shadow-sm' 
-                    : 'text-slate-500 hover:text-slate-300'
-                }`}
-            >
-                <Layout size={16} />
-                エクスプローラー
-            </button>
-            <button
-                onClick={() => setActiveTab('ai')}
-                className={`flex items-center gap-2 px-4 py-1.5 rounded-md text-sm font-medium transition-all ${
-                    activeTab === 'ai' 
-                    ? 'bg-slate-800 text-purple-400 shadow-sm' 
-                    : 'text-slate-500 hover:text-slate-300'
-                }`}
-            >
-                <BrainCircuit size={16} />
-                AI検索
-            </button>
-        </div>
-
+                <div className="flex items-center bg-slate-950 p-1 rounded-lg border border-slate-800 ml-8">
+                    <button
+                        onClick={() => setActiveTab('explorer')}
+                        className={`flex items-center gap-2 px-4 py-1.5 rounded-md text-sm font-medium transition-all ${
+                            activeTab === 'explorer'
+                            ? 'bg-slate-800 text-blue-400 shadow-sm'
+                            : 'text-slate-500 hover:text-slate-300'
+                        }`}
+                    >
+                        <Layout size={16} />
+                        エクスプローラー
+                    </button>
+                    <button
+                        onClick={() => setActiveTab('ai')}
+                        className={`flex items-center gap-2 px-4 py-1.5 rounded-md text-sm font-medium transition-all ${
+                            activeTab === 'ai'
+                            ? 'bg-slate-800 text-purple-400 shadow-sm'
+                            : 'text-slate-500 hover:text-slate-300'
+                        }`}
+                    >
+                        <BrainCircuit size={16} />
+                        AI検索
+                    </button>
+                    <button
+                        onClick={() => setActiveTab('saved_pages')}
+                        className={`flex items-center gap-2 px-4 py-1.5 rounded-md text-sm font-medium transition-all ${
+                            activeTab === 'saved_pages'
+                            ? 'bg-slate-800 text-emerald-400 shadow-sm'
+                            : 'text-slate-500 hover:text-slate-300'
+                        }`}
+                    >
+                        <BookmarkCheck size={16} />
+                        保存済みページ
+                    </button>
+                </div>
         <div className="flex-1" />
         
         <div className="hidden sm:flex items-center gap-2 text-slate-500 text-xs font-medium mr-4">
@@ -140,142 +151,174 @@ function App() {
 
       {/* Main Content */}
       <div className="flex-1 flex overflow-hidden">
-          {activeTab === 'explorer' ? (
-              // === Explorer View (Dual Pane) ===
-              <PanelGroup orientation="vertical">
-                <Panel defaultSize={60} minSize={20}>
-                    <PanelGroup orientation="horizontal">
-                        <Panel defaultSize={50} minSize={20} className="p-2">
-                             <div className="h-full shadow-2xl shadow-black/50 rounded-xl overflow-hidden">
-                                <BookmarkList 
-                                    title="ソースパネル"
-                                    folderId={leftFolderId} 
-                                    onNavigate={setLeftFolderId}
-                                    onSelectUrl={(url) => setPreviewUrl(url)}
-                                    className="h-full border-none rounded-none"
-                                    selectedUrl={previewUrl}
-                                />
-                            </div>
-                        </Panel>
-                        
-                        <PanelResizeHandle className="w-1.5 bg-slate-950 hover:bg-blue-600/50 transition-colors flex flex-col justify-center items-center cursor-col-resize group">
-                            <div className="h-8 w-1 rounded-full bg-slate-700 group-hover:bg-blue-400 transition-colors" />
-                        </PanelResizeHandle>
+          {(() => {
+              let content;
+              if (activeTab === 'explorer') {
+                  content = (
+                      // === Explorer View (Dual Pane) ===
+                      <PanelGroup orientation="vertical">
+                          <Panel defaultSize={60} minSize={20}>
+                              <PanelGroup orientation="horizontal">
+                                  <Panel defaultSize={50} minSize={20} className="p-2">
+                                      <div className="h-full shadow-2xl shadow-black/50 rounded-xl overflow-hidden">
+                                          <BookmarkList
+                                              title="ソースパネル"
+                                              folderId={leftFolderId}
+                                              onNavigate={setLeftFolderId}
+                                              onSelectUrl={(url) => setPreviewUrl(url)}
+                                              className="h-full border-none rounded-none"
+                                              selectedUrl={previewUrl}
+                                          />
+                                      </div>
+                                  </Panel>
 
-                        <Panel defaultSize={50} minSize={20} className="p-2">
-                            <div className="h-full shadow-2xl shadow-black/50 rounded-xl overflow-hidden">
-                                <BookmarkList 
-                                    title="ターゲットパネル"
-                                    folderId={rightFolderId} 
-                                    onNavigate={setRightFolderId} 
-                                    onSelectUrl={(url) => setPreviewUrl(url)}
-                                    className="h-full border-none rounded-none"
-                                    selectedUrl={previewUrl}
-                                />
-                            </div>
-                        </Panel>
-                    </PanelGroup>
-                </Panel>
-                
-                <PanelResizeHandle className="h-1.5 bg-slate-950 hover:bg-blue-600/50 transition-colors flex justify-center items-center cursor-row-resize group">
-                     <div className="w-8 h-1 rounded-full bg-slate-700 group-hover:bg-blue-400 transition-colors" />
-                </PanelResizeHandle>
+                                  <PanelResizeHandle className="w-1.5 bg-slate-950 hover:bg-blue-600/50 transition-colors flex flex-col justify-center items-center cursor-col-resize group">
+                                      <div className="h-8 w-1 rounded-full bg-slate-700 group-hover:bg-blue-400 transition-colors" />
+                                  </PanelResizeHandle>
 
-                <Panel defaultSize={40} minSize={10} collapsible={true} collapsedSize={0}>
-                    <div className="h-full bg-slate-900 border-t border-slate-800 shadow-[0_-4px_20px_rgba(0,0,0,0.4)] z-10 flex flex-col">
-                        <div className="flex items-center justify-between px-6 py-2 bg-slate-900 border-b border-slate-800 h-10 select-none flex-none">
-                            <div className="flex items-center gap-2 max-w-[70%]">
-                                <div className={`w-2 h-2 rounded-full ${previewUrl ? 'bg-green-500 shadow-[0_0_8px_rgba(34,197,94,0.6)]' : 'bg-slate-700'}`} />
-                                <span className="text-xs font-mono text-slate-400 truncate">
-                                    {previewUrl || '選択を待機中...'}
-                                </span>
-                            </div>
-                            
-                            {previewUrl && (
-                                <a 
-                                    href={previewUrl} 
-                                    target="_blank" 
-                                    rel="noopener noreferrer"
-                                    className="flex items-center gap-1.5 text-xs font-medium text-blue-400 hover:text-blue-300 transition-colors px-2 py-1 hover:bg-blue-500/10 rounded-md"
-                                >
-                                    <span>外部で開く</span>
-                                    <ExternalLink size={12} />
-                                </a>
-                            )}
-                        </div>
-                        <div className="flex-1 relative bg-slate-950 flex flex-col min-h-0">
-                            {previewUrl ? (
-                                <div className="flex-1 relative w-full h-full bg-white">
-                                    <iframe 
-                                        src={previewUrl} 
-                                        className="w-full h-full border-none" 
-                                        title="プレビュー"
-                                        sandbox="allow-scripts allow-same-origin allow-forms"
-                                        referrerPolicy="no-referrer"
+                                  <Panel defaultSize={50} minSize={20} className="p-2">
+                                      <div className="h-full shadow-2xl shadow-black/50 rounded-xl overflow-hidden">
+                                          <BookmarkList
+                                              title="ターゲットパネル"
+                                              folderId={rightFolderId}
+                                              onNavigate={setRightFolderId}
+                                              onSelectUrl={(url) => setPreviewUrl(url)}
+                                              className="h-full border-none rounded-none"
+                                              selectedUrl={previewUrl}
+                                          />
+                                      </div>
+                                  </Panel>
+                              </PanelGroup>
+                          </Panel>
+
+                          <PanelResizeHandle className="h-1.5 bg-slate-950 hover:bg-blue-600/50 transition-colors flex justify-center items-center cursor-row-resize group">
+                              <div className="w-8 h-1 rounded-full bg-slate-700 group-hover:bg-blue-400 transition-colors" />
+                          </PanelResizeHandle>
+
+                          <Panel defaultSize={40} minSize={10} collapsible={true} collapsedSize={0}>
+                              <div className="h-full bg-slate-900 border-t border-slate-800 shadow-[0_-4px_20px_rgba(0,0,0,0.4)] z-10 flex flex-col">
+                                  <div className="flex items-center justify-between px-6 py-2 bg-slate-900 border-b border-slate-800 h-10 select-none flex-none">
+                                      <div className="flex items-center gap-2 max-w-[70%]">
+                                          <div className={`w-2 h-2 rounded-full ${previewUrl ? 'bg-green-500 shadow-[0_0_8px_rgba(34,197,94,0.6)]' : 'bg-slate-700'}`} />
+                                          <span className="text-xs font-mono text-slate-400 truncate">
+                                              {previewUrl || '選択を待機中...'}
+                                          </span>
+                                      </div>
+
+                                      {previewUrl && (
+                                          <a
+                                              href={previewUrl}
+                                              target="_blank"
+                                              rel="noopener noreferrer"
+                                              className="flex items-center gap-1.5 text-xs font-medium text-blue-400 hover:text-blue-300 transition-colors px-2 py-1 hover:bg-blue-500/10 rounded-md"
+                                          >
+                                              <span>外部で開く</span>
+                                              <ExternalLink size={12} />
+                                          </a>
+                                      )}
+                                  </div>
+                                  <div className="flex-1 relative bg-slate-950 flex flex-col min-h-0">
+                                      {previewUrl ? (
+                                          <div className="flex-1 relative w-full h-full bg-white">
+                                              <iframe
+                                                  src={previewUrl}
+                                                  className="w-full h-full border-none"
+                                                  title="プレビュー"
+                                                  sandbox="allow-scripts allow-same-origin allow-forms"
+                                                  referrerPolicy="no-referrer"
+                                              />
+                                          </div>
+                                      ) : (
+                                          <div className="flex flex-col items-center justify-center h-full text-slate-600 gap-3">
+                                              <Maximize2 size={40} className="opacity-20" />
+                                              <span className="text-sm font-medium opacity-50">コンテンツをプレビューするにはブックマークを選択してください</span>
+                                          </div>
+                                      )}
+                                  </div>
+                              </div>
+                          </Panel>
+                      </PanelGroup>
+                  );
+              } else if (activeTab === 'ai') {
+                  content = (
+                      // === AI Search View ===
+                      <div className="flex-1 p-4 overflow-hidden flex flex-col items-center justify-start bg-slate-950 relative">
+                          {/* View Mode Toggle (Floating or Fixed) */}
+                          <div className="absolute top-4 right-6 z-10 flex gap-3">
+                              <button
+                                  onClick={() => setIsOrganizeOpen(true)}
+                                  className="flex items-center gap-2 px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-lg border border-slate-700 transition-colors text-xs font-medium"
+                              >
+                                  <FolderOutput size={14} className="text-yellow-500" />
+                                  自動整理
+                              </button>
+
+                              <div className="flex bg-slate-900 border border-slate-700 rounded-lg p-1 shadow-lg">
+                                  <button
+                                      onClick={() => setAiViewMode('list')}
+                                      className={`p-1.5 rounded transition-colors ${aiViewMode === 'list' ? 'bg-slate-700 text-white' : 'text-slate-400 hover:text-slate-200'}`}
+                                      title="リスト表示"
+                                  >
+                                      <List size={16} />
+                                  </button>
+                                  <button
+                                      onClick={() => setAiViewMode('graph')}
+                                      className={`p-1.5 rounded transition-colors ${aiViewMode === 'graph' ? 'bg-slate-700 text-purple-400' : 'text-slate-400 hover:text-slate-200'}`}
+                                      title="2Dグラフ表示"
+                                  >
+                                      <Network size={16} />
+                                  </button>
+                                  <button
+                                      onClick={() => setAiViewMode('graph3d')}
+                                      className={`p-1.5 rounded transition-colors ${aiViewMode === 'graph3d' ? 'bg-slate-700 text-blue-400' : 'text-slate-400 hover:text-slate-200'}`}
+                                      title="3Dマップ表示"
+                                  >
+                                      <Box size={16} />
+                                  </button>
+                              </div>
+                          </div>
+
+                          <div className="w-full h-full flex flex-col gap-4">
+                              {aiViewMode === 'list' ? (
+                                  <RelatedLinksList
+                                      targetUrl={previewUrl || undefined}
+                                      onSelectUrl={(url) => setPreviewUrl(url)}
+                                      className="flex-1 border-none shadow-2xl shadow-purple-900/10"
+                                  />
+                              ) : aiViewMode === 'graph' ? (
+                                  <div className="flex-1 w-full h-full relative rounded-xl overflow-hidden border border-slate-800 shadow-2xl">
+                                      <NetworkGraph
+                                          onNodeClick={(url) => setPreviewUrl(url)}
+                                          className="absolute inset-0 w-full h-full"
+                                      />
+                                  </div>
+                              ) : (
+                                <div className="flex-1 w-full h-full relative rounded-xl overflow-hidden border border-slate-800 shadow-2xl">
+                                    <NetworkGraph3D
+                                        onNodeClick={(url) => setPreviewUrl(url)}
+                                        className="absolute inset-0 w-full h-full"
                                     />
                                 </div>
-                            ) : (
-                                <div className="flex flex-col items-center justify-center h-full text-slate-600 gap-3">
-                                    <Maximize2 size={40} className="opacity-20" />
-                                    <span className="text-sm font-medium opacity-50">コンテンツをプレビューするにはブックマークを選択してください</span>
-                                </div>
-                            )}
-                        </div>
-                    </div>
-                </Panel>
-              </PanelGroup>
-          ) : (
-              // === AI Search View ===
-              <div className="flex-1 p-4 overflow-hidden flex flex-col items-center justify-start bg-slate-950 relative">
-                  {/* View Mode Toggle (Floating or Fixed) */}
-                  <div className="absolute top-4 right-6 z-10 flex gap-3">
-                      <button
-                          onClick={() => setIsOrganizeOpen(true)}
-                          className="flex items-center gap-2 px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-lg border border-slate-700 transition-colors text-xs font-medium"
-                      >
-                          <FolderOutput size={14} className="text-yellow-500" />
-                          自動整理
-                      </button>
-
-                      <div className="flex bg-slate-900 border border-slate-700 rounded-lg p-1 shadow-lg">
-                          <button 
-                              onClick={() => setAiViewMode('list')}
-                              className={`p-1.5 rounded transition-colors ${aiViewMode === 'list' ? 'bg-slate-700 text-white' : 'text-slate-400 hover:text-slate-200'}`}
-                              title="リスト表示"
-                          >
-                              <List size={16} />
-                          </button>
-                          <button 
-                              onClick={() => setAiViewMode('graph')}
-                              className={`p-1.5 rounded transition-colors ${aiViewMode === 'graph' ? 'bg-slate-700 text-purple-400' : 'text-slate-400 hover:text-slate-200'}`}
-                              title="グラフ表示"
-                          >
-                              <Network size={16} />
-                          </button>
-                      </div>
-                  </div>
-
-                  <div className="w-full max-w-4xl h-full flex flex-col gap-4">
-                      {aiViewMode === 'list' ? (
-                          <>
-                              <RelatedLinksList 
-                                  targetUrl={previewUrl || undefined}
-                                  onSelectUrl={(url) => setPreviewUrl(url)}
-                                  className="flex-1 border-none shadow-2xl shadow-purple-900/10"
-                              />
-                              <VectorManager />
-                          </>
-                      ) : (
-                          <div className="flex-1 w-full h-full relative rounded-xl overflow-hidden border border-slate-800 shadow-2xl">
-                              <NetworkGraph 
-                                  onNodeClick={(url) => setPreviewUrl(url)} 
-                                  className="absolute inset-0 w-full h-full"
-                              />
+                              )}
                           </div>
-                      )}
-                  </div>
-              </div>
-          )}
+                      </div>
+                  );
+              } else if (activeTab === 'saved_pages') {
+                  content = (
+                      // === Saved Pages View ===
+                      <SavedPages 
+                        onSelectUrl={(url) => setPreviewUrl(url)}
+                        className="flex-1"
+                      />
+                  );
+              } else {
+                  content = (
+                      // Default view or error state
+                      <div>Unknown Tab</div>
+                  );
+              }
+              return content;
+          })()}
       </div>
       
       <SettingsModal isOpen={isSettingsOpen} onClose={() => setIsSettingsOpen(false)} />
