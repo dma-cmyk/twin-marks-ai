@@ -35,11 +35,12 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
     try {
       await chrome.storage.local.set({ analyzing: true, analyzingTitle: tab.title });
 
-      const settings = await chrome.storage.local.get(['geminiApiKey', 'embeddingModel', 'generationModel', 'extractionEngine']);
+      const settings = await chrome.storage.local.get(['geminiApiKey', 'embeddingModel', 'generationModel', 'extractionEngine', 'useImageAnalysis']);
       const apiKey = settings.geminiApiKey as string;
       const embedModelName = (settings.embeddingModel || 'models/embedding-001') as string;
       const genModelName = (settings.generationModel || 'models/gemini-1.5-flash') as string;
       const engine = (settings.extractionEngine || 'defuddle') as 'defuddle' | 'turndown';
+      const useImageAnalysis = settings.useImageAnalysis === true; // Default false
 
       if (!apiKey) {
         console.error('API Key not found');
@@ -92,7 +93,54 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
       const { title, url, text } = response;
       console.log(`Content extracted via content script using ${engine}, text length: ${text.length}`);
 
+      // スクリーンショットの取得（マルチモーダル解析用）
+      let screenshotData: string | undefined;
+      if (useImageAnalysis) {
+          try {
+              screenshotData = await chrome.tabs.captureVisibleTab(tab.windowId, { format: 'jpeg', quality: 60 });
+          } catch (e) {
+              console.warn("Screenshot capture failed, proceeding with text only", e);
+          }
+      }
+
       // 3. AI処理（並列実行）
+      let generatedDescription = "";
+      
+      if (screenshotData) {
+          // 画像がある場合（マルチモーダル）
+          const descriptionPrompt = `
+以下のWebページの画像（スクリーンショット）とテキスト内容から、このページが何について書かれているか、どのようなコンテンツ（記事、ツール、図表、ログイン画面など）であるか、日本語で詳細に説明してください。
+特に、画像内の図やグラフ、UI要素などの視覚情報も考慮してください。
+もしログイン画面や「読み込み中」に見える場合でも、背景やタイトルから本来の目的（例: 「〇〇というサービスのダッシュボード」）を推測してください。
+
+タイトル: ${title}
+URL: ${url}
+抽出テキスト: ${text.substring(0, 1000)}...
+          `.trim();
+          try {
+              generatedDescription = await generateText(descriptionPrompt, apiKey, genModelName, screenshotData);
+          } catch (e) {
+              console.error("Multimodal description generation failed", e);
+              generatedDescription = ""; // Fallback to text-only logic below
+          }
+      }
+
+      // 画像解析が無効、または失敗した場合のフォールバック
+      if (!generatedDescription) {
+           try {
+               generatedDescription = await generateText(
+                  `以下のWebページのテキスト内容を、日本語で50文字以内で簡潔に要約・説明してください。\n\nタイトル: ${title}\nURL: ${url}\n\n${text.substring(0, 5000)}`,
+                  apiKey,
+                  genModelName
+               );
+           } catch (e) {
+               console.warn('Text-only summary generation failed', e);
+               generatedDescription = text.substring(0, 500);
+           }
+      }
+
+      console.log("Generated Description:", generatedDescription);
+
       const embeddingPromise = (async () => {
           let vector: number[] | null = null;
           let lastError: any = null;
@@ -105,10 +153,15 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
           ];
           const uniqueModels = Array.from(new Set(candidateModels));
 
+          // ベクトル化の対象: 生成された説明文があればそれを優先、なければタイトルと説明の組み合わせ
+          const textToEmbed = (generatedDescription.length > 50) 
+              ? generatedDescription 
+              : `${title}\n${generatedDescription}\nContext: ${text.substring(0, 1000)}`;
+
           for (const m of uniqueModels) {
               try {
                   if (!m) continue;
-                  vector = await getEmbedding(text, apiKey, m);
+                  vector = await getEmbedding(textToEmbed, apiKey, m);
                   if (m !== embedModelName) {
                       await chrome.storage.local.set({ embeddingModel: m });
                   }
@@ -123,18 +176,20 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
           return vector;
       })();
 
-      const summaryPromise = generateText(
-          `以下のWebページのテキスト内容を、日本語で50文字以内で簡潔に要約・説明してください。\n\nタイトル: ${title}\nURL: ${url}\n\n${text.substring(0, 5000)}`,
-          apiKey,
-          genModelName
-      ).catch(e => {
-          console.warn('Summary generation failed', e);
-          return '';
-      });
+      // 要約（表示用）
+      const summaryPromise = (async () => {
+          if (generatedDescription.length < 100) return generatedDescription;
+          // 長すぎる場合は表示用に短縮（すでにテキストのみ生成の場合は短いのでスキップ可能だが念のため）
+          return generateText(
+              `以下の文章を50文字以内で要約してください。\n\n${generatedDescription}`, 
+              apiKey, 
+              genModelName
+          ).catch(() => generatedDescription.substring(0, 100));
+      })();
 
-      const [vector, description] = await Promise.all([embeddingPromise, summaryPromise]);
+      const [vector, shortSummary] = await Promise.all([embeddingPromise, summaryPromise]);
       
-      await storeVector(url, title, vector, text, description, true);
+      await storeVector(url, title, vector, text, shortSummary, true);
       chrome.runtime.sendMessage({ type: 'VECTOR_UPDATED' }).catch(() => {});
 
       await chrome.action.setBadgeText({ tabId: tab.id, text: 'OK' });

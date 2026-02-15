@@ -4,7 +4,7 @@ import type { ForceGraphMethods, LinkObject, NodeObject } from 'react-force-grap
 import { getAllVectors } from '../utils/vectorStore';
 import { getEmbedding } from '../utils/embedding';
 import { similarity } from 'ml-distance';
-import { Loader2, Search, X, Settings2, Minimize2 } from 'lucide-react';
+import { Loader2, Search, X, Settings2, Minimize2, ChevronLeft, ChevronRight } from 'lucide-react';
 
 interface NetworkGraphProps {
   onNodeClick: (url: string) => void;
@@ -38,10 +38,12 @@ export const NetworkGraph: React.FC<NetworkGraphProps> = ({ onNodeClick, classNa
   const [isLoading, setIsLoading] = useState(false);
   const [isSearching, setIsSearching] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
+  const [searchResults, setSearchResults] = useState<CustomNode[]>([]);
+  const [currentSearchIndex, setCurrentSearchIndex] = useState(0);
   
   // Controls
   const [showControls, setShowControls] = useState(false);
-  const [threshold, setThreshold] = useState(0.65);
+  const [threshold, setThreshold] = useState(0.75);
   const [linkOpacity, setLinkOpacity] = useState(0.2);
   const [cachedVectors, setCachedVectors] = useState<any[]>([]);
 
@@ -188,9 +190,33 @@ export const NetworkGraph: React.FC<NetworkGraphProps> = ({ onNodeClick, classNa
     return () => chrome.runtime.onMessage.removeListener(handleMessage);
   }, []); // Bind once
 
+  const navigateToNode = (node: CustomNode) => {
+      if (node.x !== undefined && node.y !== undefined && fgRef.current) {
+          fgRef.current.centerAt(node.x, node.y, 1000);
+          fgRef.current.zoom(4, 2000);
+      }
+  };
+
+  const handlePrevResult = () => {
+      if (searchResults.length === 0) return;
+      const newIndex = (currentSearchIndex - 1 + searchResults.length) % searchResults.length;
+      setCurrentSearchIndex(newIndex);
+      navigateToNode(searchResults[newIndex]);
+  };
+
+  const handleNextResult = () => {
+      if (searchResults.length === 0) return;
+      const newIndex = (currentSearchIndex + 1) % searchResults.length;
+      setCurrentSearchIndex(newIndex);
+      navigateToNode(searchResults[newIndex]);
+  };
+
   const handleGraphSearch = async () => {
       if (!searchQuery.trim() || data.nodes.length === 0) return;
       setIsSearching(true);
+      setSearchResults([]);
+      setCurrentSearchIndex(0);
+
       try {
           const settings = await chrome.storage.local.get(['geminiApiKey', 'embeddingModel']);
           const apiKey = settings.geminiApiKey as string;
@@ -209,25 +235,25 @@ export const NetworkGraph: React.FC<NetworkGraphProps> = ({ onNodeClick, classNa
           }));
           
           scoredNodes.sort((a, b) => b.score - a.score);
-          const topNodes = scoredNodes.slice(0, 5).filter(n => n.score > 0.5); 
+          // Keep top 10 relevant results for navigation
+          const topNodes = scoredNodes.filter(n => n.score > 0.4).slice(0, 10).map(n => n.node);
           
           data.nodes.forEach(n => n.isHighlighted = false);
           
           if (topNodes.length > 0) {
-              topNodes.forEach(item => item.node.isHighlighted = true);
-              const best = topNodes[0].node;
-              if (best.x !== undefined && best.y !== undefined && fgRef.current) {
-                  fgRef.current.centerAt(best.x, best.y, 1000);
-                  fgRef.current.zoom(4, 2000);
-              }
-                    } else {
-                        alert('関連する星は見つかりませんでした。');
-                    }
+              setSearchResults(topNodes);
+              topNodes.forEach(node => node.isHighlighted = true);
+              
+              // Navigate to the first result
+              navigateToNode(topNodes[0]);
+          } else {
+              alert('関連する星は見つかりませんでした。');
+          }
                     
-                } catch (e) {
-                    console.error(e);
-                    alert('検索エラー');
-                } finally {
+      } catch (e) {
+          console.error(e);
+          alert('検索エラー');
+      } finally {
           setIsSearching(false);
       }
   };
@@ -274,7 +300,11 @@ export const NetworkGraph: React.FC<NetworkGraphProps> = ({ onNodeClick, classNa
                 />
                 {searchQuery && (
                     <button 
-                        onClick={() => { setSearchQuery(''); data.nodes.forEach(n => n.isHighlighted = false); }}
+                        onClick={() => { 
+                            setSearchQuery(''); 
+                            setSearchResults([]);
+                            data.nodes.forEach(n => n.isHighlighted = false); 
+                        }}
                         className="absolute right-2 top-1/2 -translate-y-1/2 text-slate-500 hover:text-white"
                     >
                         <X size={12} />
@@ -288,6 +318,27 @@ export const NetworkGraph: React.FC<NetworkGraphProps> = ({ onNodeClick, classNa
             >
                 {isSearching ? <Loader2 size={14} className="animate-spin" /> : <Search size={14} />}
             </button>
+            
+            {/* Search Navigation */}
+            {searchResults.length > 0 && (
+                <div className="flex items-center gap-1 bg-slate-900/80 backdrop-blur border border-slate-700 rounded-full px-2 py-1 ml-2 animate-in fade-in slide-in-from-left-4">
+                    <button 
+                        onClick={handlePrevResult}
+                        className="p-1 text-slate-400 hover:text-white hover:bg-slate-700/50 rounded-full transition-colors"
+                    >
+                        <ChevronLeft size={14} />
+                    </button>
+                    <span className="text-[10px] font-mono text-purple-300 min-w-[30px] text-center">
+                        {currentSearchIndex + 1} / {searchResults.length}
+                    </span>
+                    <button 
+                        onClick={handleNextResult}
+                        className="p-1 text-slate-400 hover:text-white hover:bg-slate-700/50 rounded-full transition-colors"
+                    >
+                        <ChevronRight size={14} />
+                    </button>
+                </div>
+            )}
         </div>
 
         {/* Control Panel Toggle (Bottom Left) */}
@@ -380,16 +431,26 @@ export const NetworkGraph: React.FC<NetworkGraphProps> = ({ onNodeClick, classNa
                     if (x === undefined || y === undefined || !Number.isFinite(x) || !Number.isFinite(y)) return;
 
                     const size = 6 + n.val * 1.5; 
+                    
+                    // Check if this node is the currently selected search result
+                    const isCurrent = searchResults.length > 0 && searchResults[currentSearchIndex]?.id === n.id;
+                    const isHigh = n.isHighlighted;
 
                     // 1. Glow Effect 
-                    const isHigh = n.isHighlighted;
-                    const glowRadius = size * (isHigh ? 4 : 2.5);
+                    const glowRadius = size * (isCurrent ? 6 : (isHigh ? 4 : 2.5));
                     const gradient = ctx.createRadialGradient(x, y, size * 0.5, x, y, glowRadius);
                     
-                    if (isHigh) {
+                    if (isCurrent) {
+                        // Current selection: Strong Cyan/White glow
+                        gradient.addColorStop(0, 'rgba(0, 255, 255, 0.9)'); 
+                        gradient.addColorStop(0.4, 'rgba(0, 200, 255, 0.5)');
+                        gradient.addColorStop(1, 'rgba(0, 0, 0, 0)');
+                    } else if (isHigh) {
+                        // General search match: Gold/Orange
                         gradient.addColorStop(0, 'rgba(234, 179, 8, 0.8)'); 
                         gradient.addColorStop(0.5, 'rgba(234, 88, 12, 0.4)'); 
                     } else {
+                        // Normal: Blue/Purple
                         gradient.addColorStop(0, 'rgba(139, 92, 246, 0.4)'); 
                         gradient.addColorStop(0.5, 'rgba(59, 130, 246, 0.1)'); 
                     }
@@ -415,13 +476,23 @@ export const NetworkGraph: React.FC<NetworkGraphProps> = ({ onNodeClick, classNa
                         }
                         ctx.restore();
                         
-                        ctx.strokeStyle = isHigh ? 'rgba(255, 200, 0, 0.8)' : 'rgba(255, 255, 255, 0.3)';
-                        ctx.lineWidth = (isHigh ? 3 : 1) / globalScale;
+                        // Stroke color
+                        if (isCurrent) {
+                            ctx.strokeStyle = 'rgba(0, 255, 255, 1.0)';
+                            ctx.lineWidth = 4 / globalScale;
+                        } else if (isHigh) {
+                            ctx.strokeStyle = 'rgba(255, 200, 0, 0.8)';
+                            ctx.lineWidth = 3 / globalScale;
+                        } else {
+                            ctx.strokeStyle = 'rgba(255, 255, 255, 0.3)';
+                            ctx.lineWidth = 1 / globalScale;
+                        }
+                        
                         ctx.beginPath();
                         ctx.arc(x, y, size, 0, 2 * Math.PI, false);
                         ctx.stroke();
                     } else {
-                        ctx.fillStyle = '#fff';
+                        ctx.fillStyle = isCurrent ? '#0ff' : '#fff';
                         ctx.beginPath();
                         ctx.arc(x, y, size * 0.6, 0, 2 * Math.PI, false);
                         ctx.fill();
@@ -429,13 +500,27 @@ export const NetworkGraph: React.FC<NetworkGraphProps> = ({ onNodeClick, classNa
 
                     // 3. Label
                     const label = n.title;
-                    const fontSize = 12 / globalScale;
-                    if (globalScale > 1.5 || n.val > 5 || isHigh) { 
-                        ctx.font = `${isHigh ? 'bold ' : ''}${fontSize}px Sans-Serif`;
+                    const fontSize = (isCurrent ? 16 : 12) / globalScale;
+                    if (globalScale > 1.5 || n.val > 5 || isHigh || isCurrent) { 
+                        ctx.font = `${isCurrent || isHigh ? 'bold ' : ''}${fontSize}px Sans-Serif`;
                         ctx.textAlign = 'center';
                         ctx.textBaseline = 'middle';
-                        ctx.fillStyle = isHigh ? '#fbbf24' : 'rgba(255, 255, 255, 0.8)';
+                        
+                        if (isCurrent) {
+                            ctx.fillStyle = '#00ffff';
+                            // Add text shadow for current item
+                            ctx.shadowColor = "#00aaaa";
+                            ctx.shadowBlur = 4;
+                        } else if (isHigh) {
+                            ctx.fillStyle = '#fbbf24';
+                            ctx.shadowBlur = 0;
+                        } else {
+                            ctx.fillStyle = 'rgba(255, 255, 255, 0.8)';
+                            ctx.shadowBlur = 0;
+                        }
+                        
                         ctx.fillText(label, x, y + size + fontSize + 2);
+                        ctx.shadowBlur = 0; // Reset
                     }
                 }}
                 

@@ -4,7 +4,7 @@ import type { ForceGraphMethods, LinkObject, NodeObject } from 'react-force-grap
 import { getAllVectors } from '../utils/vectorStore';
 import { getEmbedding } from '../utils/embedding';
 import { similarity } from 'ml-distance';
-import { Loader2, Search, X, Settings2, Minimize2, RotateCw } from 'lucide-react';
+import { Loader2, Search, X, Settings2, Minimize2, RotateCw, ChevronLeft, ChevronRight } from 'lucide-react';
 import * as THREE from 'three';
 
 interface NetworkGraph3DProps {
@@ -46,11 +46,14 @@ export const NetworkGraph3D: React.FC<NetworkGraph3DProps> = ({ onNodeClick, cla
   const [isLoading, setIsLoading] = useState(false);
   const [isSearching, setIsSearching] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
+  const [searchResults, setSearchResults] = useState<CustomNode[]>([]);
+  const [currentSearchIndex, setCurrentSearchIndex] = useState(0);
   
   // Controls
   const [showControls, setShowControls] = useState(false);
   const [threshold, setThreshold] = useState(0.75);
   const [cachedVectors, setCachedVectors] = useState<any[]>([]);
+  const [hoveredNodeId, setHoveredNodeId] = useState<string | null>(null);
 
   const fgRef = useRef<ForceGraphMethods | undefined>(undefined);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -161,9 +164,38 @@ export const NetworkGraph3D: React.FC<NetworkGraph3DProps> = ({ onNodeClick, cla
       }
   }, [threshold]);
 
+  const navigateToNode = (node: CustomNode) => {
+      if (fgRef.current && node.x !== undefined && node.y !== undefined && node.z !== undefined) {
+             const distance = 400;
+             const distRatio = 1 + distance/Math.hypot(node.x, node.y, node.z);
+             fgRef.current.cameraPosition(
+                 { x: node.x * distRatio, y: node.y * distRatio, z: node.z * distRatio },
+                 { x: node.x, y: node.y, z: node.z }, // LookAt target
+                 2000
+             );
+      }
+  };
+
+  const handlePrevResult = () => {
+      if (searchResults.length === 0) return;
+      const newIndex = (currentSearchIndex - 1 + searchResults.length) % searchResults.length;
+      setCurrentSearchIndex(newIndex);
+      navigateToNode(searchResults[newIndex]);
+  };
+
+  const handleNextResult = () => {
+      if (searchResults.length === 0) return;
+      const newIndex = (currentSearchIndex + 1) % searchResults.length;
+      setCurrentSearchIndex(newIndex);
+      navigateToNode(searchResults[newIndex]);
+  };
+
   const handleGraphSearch = async () => {
       if (!searchQuery.trim() || data.nodes.length === 0) return;
       setIsSearching(true);
+      setSearchResults([]);
+      setCurrentSearchIndex(0);
+
       try {
           const settings = await chrome.storage.local.get(['geminiApiKey', 'embeddingModel']);
           const apiKey = settings.geminiApiKey as string;
@@ -182,34 +214,25 @@ export const NetworkGraph3D: React.FC<NetworkGraph3DProps> = ({ onNodeClick, cla
           }));
           
           scoredNodes.sort((a: any, b: any) => b.score - a.score);
-          const topNodes = scoredNodes.slice(0, 5).filter((n: any) => n.score > 0.5);
+          const topNodes = scoredNodes.filter((n: any) => n.score > 0.4).slice(0, 10).map((n: any) => n.node);
           
           data.nodes.forEach((n: CustomNode) => {
               n.isHighlighted = false;
               n.score = 0; // Reset scores
           });
 
-          topNodes.forEach((item: any) => {
-              item.node.isHighlighted = true;
-          });
-          
           // Store scores for all nodes to modulate glow
           scoredNodes.forEach((item: any) => {
               item.node.score = item.score;
           });
           
           if (topNodes.length > 0) {
-              const best = topNodes[0].node;
-              if (fgRef.current) {
-                  // Look at the best match
-                  const distance = 400;
-                  const distRatio = 1 + distance/Math.hypot(best.x!, best.y!, best.z!);
-                  fgRef.current.cameraPosition(
-                      { x: best.x! * distRatio, y: best.y! * distRatio, z: best.z! * distRatio },
-                      { x: best.x!, y: best.y!, z: best.z! },
-                      2000
-                  );
-              }
+              setSearchResults(topNodes);
+              topNodes.forEach((node: CustomNode) => {
+                  node.isHighlighted = true;
+              });
+
+              navigateToNode(topNodes[0]);
           } else {
               alert('関連する星は見つかりませんでした。');
           }
@@ -255,7 +278,11 @@ export const NetworkGraph3D: React.FC<NetworkGraph3DProps> = ({ onNodeClick, cla
                 />
                 {searchQuery && (
                     <button 
-                        onClick={() => { setSearchQuery(''); data.nodes.forEach((n: CustomNode) => n.isHighlighted = false); }}
+                        onClick={() => { 
+                            setSearchQuery(''); 
+                            setSearchResults([]);
+                            data.nodes.forEach((n: CustomNode) => n.isHighlighted = false); 
+                        }}
                         className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-500 hover:text-white"
                     >
                         <X size={14} />
@@ -269,6 +296,27 @@ export const NetworkGraph3D: React.FC<NetworkGraph3DProps> = ({ onNodeClick, cla
             >
                 {isSearching ? <Loader2 size={16} className="animate-spin" /> : <Search size={16} />}
             </button>
+            
+            {/* Search Navigation */}
+            {searchResults.length > 0 && (
+                <div className="flex items-center gap-1 bg-slate-900/80 backdrop-blur border border-slate-700 rounded-full px-3 py-1 ml-2 animate-in fade-in slide-in-from-left-4 shadow-lg">
+                    <button 
+                        onClick={handlePrevResult}
+                        className="p-1 text-slate-400 hover:text-white hover:bg-slate-700/50 rounded-full transition-colors"
+                    >
+                        <ChevronLeft size={16} />
+                    </button>
+                    <span className="text-[10px] font-mono text-purple-300 min-w-[30px] text-center">
+                        {currentSearchIndex + 1} / {searchResults.length}
+                    </span>
+                    <button 
+                        onClick={handleNextResult}
+                        className="p-1 text-slate-400 hover:text-white hover:bg-slate-700/50 rounded-full transition-colors"
+                    >
+                        <ChevronRight size={16} />
+                    </button>
+                </div>
+            )}
         </div>
 
         {/* View Controls & Stats (Moved to Bottom Right to avoid overlap) */}
@@ -343,13 +391,20 @@ export const NetworkGraph3D: React.FC<NetworkGraph3DProps> = ({ onNodeClick, cla
                   const n = node as CustomNode;
                   const size = n.val || 2;
                   const isHigh = n.isHighlighted;
+                  
+                  // Check if this is the currently navigated result
+                  const isCurrent = searchResults.length > 0 && searchResults[currentSearchIndex]?.id === n.id;
+                  const isHovered = n.id === hoveredNodeId;
+                  
                   const score = n.score || 0;
                   const domain = new URL(n.url).hostname;
-                  const nodeColor = isHigh ? '#fbbf24' : (n.color || '#8b5cf6');
                   
-                  // Cache key includes high state AND a rounded score bracket for performance
+                  // Determine base color: Current=Cyan, High=Gold, Default=Original
+                  const nodeColor = isCurrent ? '#00ffff' : (isHigh ? '#fbbf24' : (n.color || '#8b5cf6'));
+                  
+                  // Cache key includes high/current/hovered state AND a rounded score bracket for performance
                   const scoreBracket = Math.floor(score * 10);
-                  const cacheKey = `${domain}_${isHigh}_${scoreBracket}`;
+                  const cacheKey = `${domain}_${isCurrent}_${isHigh}_${isHovered}_${scoreBracket}`;
                   let iconTex = textureCache.get(cacheKey);
                   
                   if (!iconTex) {
@@ -363,7 +418,7 @@ export const NetworkGraph3D: React.FC<NetworkGraph3DProps> = ({ onNodeClick, cla
                         const maxRadius = 64;
 
                         // 1. Massive Aura Glow (Vibrant background)
-                        const auraAlpha = isHigh ? 0.9 : (0.2 + score * 0.5);
+                        const auraAlpha = isCurrent ? 1.0 : (isHigh ? 0.9 : (0.2 + score * 0.5));
                         const gradOuter = ctx.createRadialGradient(centerX, centerY, 20, centerX, centerY, maxRadius);
                         gradOuter.addColorStop(0, nodeColor);
                         gradOuter.addColorStop(0.5, nodeColor);
@@ -373,8 +428,8 @@ export const NetworkGraph3D: React.FC<NetworkGraph3DProps> = ({ onNodeClick, cla
                         ctx.fillRect(0, 0, 128, 128);
 
                         // 2. Bright Core Flare (For high scores/highlights)
-                        if (isHigh || score > 0.6) {
-                            const flareAlpha = isHigh ? 0.8 : (score - 0.5);
+                        if (isCurrent || isHigh || isHovered || score > 0.6) {
+                            const flareAlpha = isCurrent ? 1.0 : (isHigh ? 0.8 : (isHovered ? 0.6 : (score - 0.5)));
                             const gradInner = ctx.createRadialGradient(centerX, centerY, 0, centerX, centerY, 50);
                             gradInner.addColorStop(0, '#ffffff');
                             gradInner.addColorStop(0.2, '#ffffff');
@@ -385,9 +440,9 @@ export const NetworkGraph3D: React.FC<NetworkGraph3DProps> = ({ onNodeClick, cla
                             ctx.fillRect(0, 0, 128, 128);
 
                             // 3. Sparkly Star Spikes (Double Cross flare)
-                            ctx.globalAlpha = isHigh ? 1.0 : 0.7;
+                            ctx.globalAlpha = (isCurrent || isHigh || isHovered) ? 1.0 : 0.7;
                             ctx.strokeStyle = '#ffffff';
-                            const spikeSize = isHigh ? 64 : (32 + score * 32);
+                            const spikeSize = (isCurrent || isHigh || isHovered) ? 64 : (32 + score * 32);
                             
                             const drawSpike = (angle: number, width: number, size: number) => {
                                 ctx.save();
@@ -411,7 +466,7 @@ export const NetworkGraph3D: React.FC<NetworkGraph3DProps> = ({ onNodeClick, cla
                             drawSpike(Math.PI / 2, 3, spikeSize);
                             
                             // Diagonal Spikes (Subtle)
-                            if (isHigh || score > 0.8) {
+                            if (isCurrent || isHigh || isHovered || score > 0.8) {
                                 drawSpike(Math.PI / 4, 1.5, spikeSize * 0.7);
                                 drawSpike(-Math.PI / 4, 1.5, spikeSize * 0.7);
                             }
@@ -423,7 +478,7 @@ export const NetworkGraph3D: React.FC<NetworkGraph3DProps> = ({ onNodeClick, cla
                         ctx.clearRect(0, 0, 128, 128);
                         drawMainGlow();
                         // White Disc
-                        const discSize = isHigh ? 45 : (32 + score * 10);
+                        const discSize = (isCurrent || isHigh || isHovered) ? 45 : (32 + score * 10);
                         ctx.fillStyle = 'white';
                         ctx.beginPath(); ctx.arc(64, 64, discSize, 0, Math.PI*2); ctx.fill();
                         // Category Color Center
@@ -447,8 +502,8 @@ export const NetworkGraph3D: React.FC<NetworkGraph3DProps> = ({ onNodeClick, cla
                                 drawMainGlow();
                                 
                                 // Glowing White BG
-                                const bgSize = isHigh ? 50 : (36 + score * 12);
-                                ctx.shadowBlur = isHigh ? 20 : (5 + score * 10);
+                                const bgSize = (isCurrent || isHigh || isHovered) ? 50 : (36 + score * 12);
+                                ctx.shadowBlur = (isCurrent || isHigh || isHovered) ? 20 : (5 + score * 10);
                                 ctx.shadowColor = nodeColor;
                                 ctx.fillStyle = 'white';
                                 ctx.beginPath(); ctx.arc(64, 64, bgSize, 0, Math.PI*2); ctx.fill();
@@ -474,20 +529,91 @@ export const NetworkGraph3D: React.FC<NetworkGraph3DProps> = ({ onNodeClick, cla
                     blending: THREE.AdditiveBlending // Makes it more "glowy"
                   });
                   const sprite = new THREE.Sprite(material);
-                  const baseScale = isHigh ? 10 : (4 + score * 6);
+                  // Scale up if current, high, or hovered
+                  let baseScale = 4 + score * 6; // Default scale based on score
+                  if (isHigh) baseScale = 10;
+                  if (isCurrent) baseScale = 14;
+                  if (isHovered) baseScale *= 1.3; // Slight magnification on hover
+
                   sprite.scale.set(size * baseScale, size * baseScale, 1);
                   return sprite;
                 }}
                 
-                // === Tooltip (Rich HTML) ===
+                // === Tooltip (Sci-Fi Monitor Style) ===
                 nodeLabel={(node: any) => {
                     const n = node as CustomNode;
                     return `
-                        <div style="background: rgba(15, 23, 42, 0.95); border: 1px solid rgba(59, 130, 246, 0.3); padding: 12px; border-radius: 10px; box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.5); max-width: 300px; backdrop-filter: blur(8px); pointer-events: none;">
-                            <div style="font-weight: 800; font-size: 14px; color: #f8fafc; margin-bottom: 8px; line-height: 1.4; border-bottom: 1px solid rgba(59, 130, 246, 0.2); padding-bottom: 6px;">${n.title || n.url}</div>
-                            ${n.description ? `<div style="font-size: 11px; color: #cbd5e1; line-height: 1.6; display: -webkit-box; -webkit-line-clamp: 4; -webkit-box-orient: vertical; overflow: hidden; margin-bottom: 8px; font-style: italic;">${n.description}</div>` : ''}
-                            <div style="font-size: 10px; color: #3b82f6; font-family: monospace; letter-spacing: 0.05em; display: flex; align-items: center; gap: 4px;">
-                              <span style="opacity: 0.6;">SOURCE:</span> ${new URL(n.url).hostname}
+                        <div style="
+                            background: rgba(10, 10, 16, 0.85); 
+                            border: 1px solid rgba(0, 255, 255, 0.3);
+                            border-radius: 4px;
+                            padding: 16px; 
+                            max-width: 340px; 
+                            backdrop-filter: blur(4px); 
+                            pointer-events: none;
+                            font-family: 'Courier New', Courier, monospace;
+                            box-shadow: 0 0 20px rgba(0, 255, 255, 0.1), inset 0 0 20px rgba(0, 0, 0, 0.8);
+                            position: relative;
+                            overflow: hidden;
+                        ">
+                            <!-- Scanline Effect -->
+                            <div style="
+                                position: absolute; top: 0; left: 0; right: 0; bottom: 0;
+                                background: linear-gradient(rgba(18, 16, 16, 0) 50%, rgba(0, 0, 0, 0.25) 50%), linear-gradient(90deg, rgba(255, 0, 0, 0.06), rgba(0, 255, 0, 0.02), rgba(0, 0, 255, 0.06));
+                                background-size: 100% 2px, 3px 100%;
+                                pointer-events: none;
+                                z-index: 0;
+                            "></div>
+
+                            <!-- Corner Accents -->
+                            <div style="position: absolute; top: 0; left: 0; width: 10px; height: 10px; border-top: 2px solid cyan; border-left: 2px solid cyan;"></div>
+                            <div style="position: absolute; top: 0; right: 0; width: 10px; height: 10px; border-top: 2px solid cyan; border-right: 2px solid cyan;"></div>
+                            <div style="position: absolute; bottom: 0; left: 0; width: 10px; height: 10px; border-bottom: 2px solid cyan; border-left: 2px solid cyan;"></div>
+                            <div style="position: absolute; bottom: 0; right: 0; width: 10px; height: 10px; border-bottom: 2px solid cyan; border-right: 2px solid cyan;"></div>
+
+                            <div style="position: relative; z-index: 1;">
+                                <div style="
+                                    font-weight: 900; 
+                                    font-size: 14px; 
+                                    color: #00ffff; 
+                                    margin-bottom: 8px; 
+                                    line-height: 1.4; 
+                                    text-transform: uppercase; 
+                                    letter-spacing: 1px;
+                                    text-shadow: 0 0 5px rgba(0, 255, 255, 0.5);
+                                    border-bottom: 1px dashed rgba(0, 255, 255, 0.3);
+                                    padding-bottom: 8px;
+                                ">
+                                    ${n.title || n.url}
+                                </div>
+                                
+                                ${n.description ? `
+                                <div style="
+                                    font-size: 11px; 
+                                    color: #a5f3fc; 
+                                    line-height: 1.5; 
+                                    margin-bottom: 12px; 
+                                    text-align: justify;
+                                ">
+                                    ${n.description}
+                                </div>` : ''}
+                                
+                                <div style="
+                                    display: flex; 
+                                    align-items: center; 
+                                    justify-content: space-between;
+                                    font-size: 9px; 
+                                    color: rgba(0, 255, 255, 0.6); 
+                                    background: rgba(0, 255, 255, 0.05);
+                                    padding: 4px 8px;
+                                    border-radius: 2px;
+                                ">
+                                    <span style="display: flex; align-items: center; gap: 4px;">
+                                        <span style="width: 6px; height: 6px; background: ${n.val > 5 ? '#f59e0b' : '#00ffff'}; border-radius: 50%; box-shadow: 0 0 5px ${n.val > 5 ? '#f59e0b' : '#00ffff'};"></span>
+                                        DATA_SOURCE
+                                    </span>
+                                    <span style="letter-spacing: 0.1em;">${new URL(n.url).hostname.toUpperCase()}</span>
+                                </div>
                             </div>
                         </div>
                     `;
@@ -515,6 +641,9 @@ export const NetworkGraph3D: React.FC<NetworkGraph3DProps> = ({ onNodeClick, cla
                    const n = node as CustomNode;
                    // Right click: Preview (side panel)
                    onNodeClick(n.url);
+                }}
+                onNodeHover={(node: any) => {
+                    setHoveredNodeId(node ? (node as CustomNode).id : null);
                 }}
             />
         )}

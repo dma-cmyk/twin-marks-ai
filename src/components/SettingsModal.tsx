@@ -13,6 +13,7 @@ interface AppSettings {
   generationModel: string;
   extractionEngine: 'defuddle' | 'turndown';
   notifyUnanalyzed: boolean;
+  useImageAnalysis: boolean;
 }
 
 export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose }) => {
@@ -23,6 +24,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose })
     generationModel: 'models/gemini-1.5-flash',
     extractionEngine: 'defuddle',
     notifyUnanalyzed: true,
+    useImageAnalysis: false,
   });
   const [isLoading, setIsLoading] = useState(false);
   const [statusMsg, setStatusMsg] = useState('');
@@ -31,13 +33,14 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose })
 
   useEffect(() => {
     // Load settings from storage
-    chrome.storage?.local.get(['geminiApiKey', 'embeddingModel', 'generationModel', 'extractionEngine', 'notifyUnanalyzed'], (result) => {
+    chrome.storage?.local.get(['geminiApiKey', 'embeddingModel', 'generationModel', 'extractionEngine', 'notifyUnanalyzed', 'useImageAnalysis'], (result) => {
       setSettings({
         apiKey: (result.geminiApiKey as string) || '',
         embeddingModel: (result.embeddingModel as string) || 'models/text-embedding-004',
         generationModel: (result.generationModel as string) || 'models/gemini-1.5-flash',
         extractionEngine: (result.extractionEngine as 'defuddle' | 'turndown') || 'defuddle',
         notifyUnanalyzed: result.notifyUnanalyzed !== undefined ? (result.notifyUnanalyzed as boolean) : true,
+        useImageAnalysis: result.useImageAnalysis !== undefined ? (result.useImageAnalysis as boolean) : false,
       });
     });
   }, [isOpen]);
@@ -49,6 +52,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose })
       generationModel: settings.generationModel,
       extractionEngine: settings.extractionEngine,
       notifyUnanalyzed: settings.notifyUnanalyzed,
+      useImageAnalysis: settings.useImageAnalysis,
     }, () => {
       setStatusMsg('設定を保存しました！');
       setTimeout(() => setStatusMsg(''), 2000);
@@ -211,6 +215,29 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose })
                                     <div className="text-[9px] mt-1 opacity-60">Markdown変換 + 独自フィルタ</div>
                                 </button>
                             </div>
+                        </div>
+
+                        <div className="flex items-center justify-between p-4 bg-slate-950/50 rounded-xl border border-slate-800">
+                            <div className="space-y-0.5">
+                                <label className="text-sm font-bold text-slate-300">
+                                    画像解析を使用 (スクリーンショット)
+                                </label>
+                                <p className="text-[10px] text-slate-500">
+                                    精度が向上しますが、トークン消費が増えます (約258トークン/回)
+                                </p>
+                            </div>
+                            <button
+                                onClick={() => setSettings({ ...settings, useImageAnalysis: !settings.useImageAnalysis })}
+                                className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${
+                                    settings.useImageAnalysis ? 'bg-blue-600' : 'bg-slate-700'
+                                }`}
+                            >
+                                <span
+                                    className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
+                                        settings.useImageAnalysis ? 'translate-x-6' : 'translate-x-1'
+                                    }`}
+                                />
+                            </button>
                         </div>
 
                         <div className="flex items-center justify-between p-4 bg-slate-950/50 rounded-xl border border-slate-800">

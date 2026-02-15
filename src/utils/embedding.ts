@@ -15,12 +15,30 @@ export const getEmbedding = async (text: string, apiKey: string, modelName: stri
   return result.embedding.values;
 };
 
-export const generateText = async (prompt: string, apiKey: string, modelName: string = 'gemini-1.5-flash'): Promise<string> => {
+export const generateText = async (prompt: string, apiKey: string, modelName: string = 'gemini-1.5-flash', imageData?: string): Promise<string> => {
     if (!apiKey) throw new Error('API Key is missing');
   
     const genAI = new GoogleGenerativeAI(apiKey);
     const model = genAI.getGenerativeModel({ model: modelName });
   
-    const result = await model.generateContent(prompt);
+    let result;
+    if (imageData) {
+        // Remove data URL prefix if present (e.g., "data:image/jpeg;base64,")
+        const base64Data = imageData.replace(/^data:image\/\w+;base64,/, "");
+        
+        const parts = [
+            { text: prompt },
+            {
+                inlineData: {
+                    mimeType: "image/jpeg",
+                    data: base64Data
+                }
+            }
+        ];
+        result = await model.generateContent({ contents: [{ role: 'user', parts }] });
+    } else {
+        result = await model.generateContent(prompt);
+    }
+
     return result.response.text();
 };
