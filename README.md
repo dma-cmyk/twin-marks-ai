@@ -2,7 +2,7 @@
 
 **Twin Marks AI** は、従来の2画面ファイラ形式のブックマーク管理に加え、Google Gemini APIを活用した**AI意味検索**、**3Dナレッジグラフ**、**スマートライブラリ**機能を搭載した、次世代のブックマーク管理Chrome拡張機能です。
 
-![Twin Marks AI Galaxy View](https://i.imgur.com/example-galaxy.png)
+
 ![Twin Marks AI New Feature](https://i.imgur.com/5pPYxtA.png)
 *(※ここに最新版の3Dマップ表示のスクリーンショットを貼ると効果的です)*
 
