@@ -71,7 +71,7 @@ AI機能を利用するには、Gemini APIキーが必要です。
 1.  拡張機能のアイコンをクリック（またはポップアップを開く）。
 2.  右上の **設定（歯車アイコン）** をクリック。
 3.  **Gemini API Key** を入力し、「Fetch Models」でモデル一覧を取得して保存してください。
-4.  推奨モデル: `gemini-1.5-flash` (生成), `text-embedding-004` (ベクトル化)
+4.  推奨モデル: `gemini-2.5-flash-lite` (生成), `gemini-embedding-001` (ベクトル化)
 
 ---
 
