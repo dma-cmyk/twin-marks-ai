@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { X, FolderOutput, Loader2, Sparkles } from 'lucide-react';
 import { clusterBookmarks } from '../utils/clustering';
 import { createOrganizedBookmarks } from '../utils/bookmarkService';
+import { useDialog } from '../context/DialogContext';
 
 interface AutoOrganizeModalProps {
   isOpen: boolean;
@@ -9,6 +10,7 @@ interface AutoOrganizeModalProps {
 }
 
 export const AutoOrganizeModal: React.FC<AutoOrganizeModalProps> = ({ isOpen, onClose }) => {
+  const { showAlert } = useDialog();
   const [clusterCount, setClusterCount] = useState(5);
   const [namingInstruction, setNamingInstruction] = useState('');
   const [isProcessing, setIsProcessing] = useState(false);
@@ -25,7 +27,7 @@ export const AutoOrganizeModal: React.FC<AutoOrganizeModalProps> = ({ isOpen, on
         const modelName = (settings?.generationModel || 'gemini-1.5-flash') as string;
 
         if (!apiKey) {
-            alert('先に設定でGemini APIキーを設定してください。');
+            await showAlert('先に設定でGemini APIキーを設定してください。');
             setIsProcessing(false);
             return;
         }

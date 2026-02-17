@@ -1,6 +1,6 @@
 import { GoogleGenerativeAI } from '@google/generative-ai';
 
-export const getEmbedding = async (text: string, apiKey: string, modelName: string = 'text-embedding-004'): Promise<number[]> => {
+export const getEmbedding = async (text: string, apiKey: string, modelName: string = 'models/embedding-001'): Promise<number[]> => {
   if (!apiKey) throw new Error('API Key is missing');
 
   // Pass the raw model name. The user/settings should provide the correct format (e.g. 'models/text-embedding-004').
@@ -15,7 +15,7 @@ export const getEmbedding = async (text: string, apiKey: string, modelName: stri
   return result.embedding.values;
 };
 
-export const generateText = async (prompt: string, apiKey: string, modelName: string = 'gemini-1.5-flash', imageData?: string): Promise<string> => {
+export const generateText = async (prompt: string, apiKey: string, modelName: string = 'models/gemini-2.5-flash-lite', imageData?: string): Promise<string> => {
     if (!apiKey) throw new Error('API Key is missing');
   
     const genAI = new GoogleGenerativeAI(apiKey);

@@ -1,18 +1,17 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { removeVector, getAllVectors, exportData, importData, clearAllVectors } from '../utils/vectorStore';
-import { ExternalLink, Grid, List as ListIcon, Search, BrainCircuit, Upload, Download, RefreshCw, Library, Trash2, Clock, SortAsc, Sparkles } from 'lucide-react';
+import { removeVector, getAllVectors, exportData, importData, clearAllVectors, updateItemTags, getCategoryStats } from '../utils/vectorStore';
+import { Grid, List as ListIcon, Search, BrainCircuit, Upload, Download, RefreshCw, Library, Trash2, Clock, SortAsc, Sparkles, Tag as TagIcon, Plus, CheckSquare, Minus, Wand2, FolderOpen, FolderOutput } from 'lucide-react';
 import { getEmbedding } from '../utils/embedding';
 import { similarity } from 'ml-distance';
-const { cosine } = similarity;
+import type { VectorItem } from './SavedPages/Items';
+import { ListViewItem, GridViewItem } from './SavedPages/Items';
+import { useDialog } from '../context/DialogContext'; // Import
+import { optimizeTags } from '../utils/tagOptimizer'; // Import
+import { TagOptimizationModal } from './TagOptimizationModal'; // Import
+import { AutoOrganizeModal } from './AutoOrganizeModal';
+import { syncCategories } from '../utils/categoryService';
 
-interface VectorItem {
-  url: string;
-  title: string;
-  timestamp: number;
-  vector?: number[];
-  description?: string;
-  isSaved?: boolean;
-}
+const { cosine } = similarity;
 
 interface SavedPagesProps {
   onSelectUrl: (url: string) => void;
@@ -20,18 +19,31 @@ interface SavedPagesProps {
 }
 
 export const SavedPages: React.FC<SavedPagesProps> = ({ onSelectUrl, className }) => {
+  const { showAlert, showConfirm, showPrompt } = useDialog(); // Hook
   const [items, setItems] = useState<VectorItem[]>([]);
   const [displayItems, setDisplayItems] = useState<VectorItem[]>([]);
   const [viewMode, setViewMode] = useState<'list' | 'grid'>('grid');
   const [searchQuery, setSearchQuery] = useState('');
+  const [selectedTag, setSelectedTag] = useState<string | null>(null);
+  const [selectedCategory, setSelectedCategory] = useState<string | null>(null);
+  const [allTags, setAllTags] = useState<{name: string, count: number}[]>([]);
+  const [allCategories, setAllCategories] = useState<{name: string, count: number}[]>([]);
+  const [selectedItems, setSelectedItems] = useState<Set<string>>(new Set());
   const [sortBy, setSortBy] = useState<'date' | 'title' | 'similarity'>('date');
+  const [showCategories, setShowCategories] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
+  // Modal & Sync States
+  const [isTagModalOpen, setIsTagModalOpen] = useState(false);
+  const [isOrganizeOpen, setIsOrganizeOpen] = useState(false);
+  const [isSyncing, setIsSyncing] = useState(false);
+  const [tagMapping, setTagMapping] = useState<Record<string, string>>({});
+
   useEffect(() => {
     loadItems();
-
-    // リアルタイム更新（別タブでの分析完了などを検知）
+    setSelectedItems(new Set());
+    
     const messageListener = (message: any) => {
         if (message.type === 'VECTOR_UPDATED') {
             console.log('Real-time update: refreshing library...');
@@ -47,6 +59,28 @@ export const SavedPages: React.FC<SavedPagesProps> = ({ onSelectUrl, className }
     try {
       const allItems = await getAllVectors();
       setItems(allItems);
+      
+      const tagMap = new Map<string, number>();
+      allItems.forEach(item => {
+          if (item.tags && Array.isArray(item.tags)) {
+              item.tags.forEach(tag => {
+                  const normalizedTag = tag.trim();
+                  if (normalizedTag) {
+                    tagMap.set(normalizedTag, (tagMap.get(normalizedTag) || 0) + 1);
+                  }
+              });
+          }
+      });
+      
+      const sortedTags = Array.from(tagMap.entries())
+        .map(([name, count]) => ({ name, count }))
+        .sort((a, b) => b.count - a.count);
+        
+      setAllTags(sortedTags);
+
+      const catStats = await getCategoryStats();
+      setAllCategories(catStats);
+      
     } catch (e) {
       console.error('Failed to load items', e);
     } finally {
@@ -56,11 +90,16 @@ export const SavedPages: React.FC<SavedPagesProps> = ({ onSelectUrl, className }
 
   useEffect(() => {
     const processItems = async () => {
-        let filtered = items.filter(item => 
-            item.title.toLowerCase().includes(searchQuery.toLowerCase()) || 
+        let filtered = items.filter(item => {
+            const matchesSearch = item.title.toLowerCase().includes(searchQuery.toLowerCase()) || 
             item.url.toLowerCase().includes(searchQuery.toLowerCase()) ||
-            (item.description && item.description.toLowerCase().includes(searchQuery.toLowerCase()))
-        );
+            (item.description && item.description.toLowerCase().includes(searchQuery.toLowerCase()));
+            
+            const matchesTag = selectedTag ? (item.tags && item.tags.includes(selectedTag)) : true;
+            const matchesCategory = selectedCategory ? (item.category === selectedCategory || (!item.category && selectedCategory === '未分類')) : true;
+            
+            return matchesSearch && matchesTag && matchesCategory;
+        });
 
         if (sortBy === 'title') {
             filtered.sort((a, b) => a.title.localeCompare(b.title));
@@ -93,11 +132,12 @@ export const SavedPages: React.FC<SavedPagesProps> = ({ onSelectUrl, className }
     };
 
     processItems();
-  }, [items, searchQuery, sortBy]);
+  }, [items, searchQuery, sortBy, selectedTag, selectedCategory]);
 
+  // Actions
   const handleDelete = async (e: React.MouseEvent, url: string) => {
     e.stopPropagation();
-    if (confirm('この履歴をライブラリから完全に削除しますか？')) {
+    if (await showConfirm('この履歴をライブラリから完全に削除しますか？')) {
       await removeVector(url);
       loadItems();
       chrome.runtime.sendMessage({ type: 'VECTOR_UPDATED' });
@@ -120,12 +160,12 @@ export const SavedPages: React.FC<SavedPagesProps> = ({ onSelectUrl, className }
           try {
               const json = ev.target?.result as string;
               const count = await importData(json);
-              alert(`${count}件の履歴をライブラリに取り込みました。`);
+              await showAlert(`${count}件の履歴をライブラリに取り込みました。`);
               loadItems();
               chrome.runtime.sendMessage({ type: 'VECTOR_UPDATED' });
           } catch (err) {
               console.error(err);
-              alert('インポートに失敗しました。');
+              await showAlert('インポートに失敗しました。');
           } finally {
               setIsLoading(false);
               if (fileInputRef.current) fileInputRef.current.value = '';
@@ -134,10 +174,118 @@ export const SavedPages: React.FC<SavedPagesProps> = ({ onSelectUrl, className }
       reader.readAsText(file);
   };
 
+  const toggleSelection = (e: React.MouseEvent, url: string) => {
+      e.stopPropagation();
+      const newSelected = new Set(selectedItems);
+      if (newSelected.has(url)) {
+          newSelected.delete(url);
+      } else {
+          newSelected.add(url);
+      }
+      setSelectedItems(newSelected);
+  };
+
+  const toggleSelectAll = () => {
+      if (selectedItems.size === displayItems.length) {
+          setSelectedItems(new Set());
+      } else {
+          setSelectedItems(new Set(displayItems.map(i => i.url)));
+      }
+  };
+
+  const handleBulkAddTag = async () => {
+      const newTag = await showPrompt('選択したアイテムに追加するタグを入力してください:');
+      if (!newTag || !newTag.trim()) return;
+      
+      setIsLoading(true);
+      for (const url of selectedItems) {
+          const item = items.find(i => i.url === url);
+          if (item) {
+              const currentTags = item.tags || [];
+              if (!currentTags.includes(newTag.trim())) {
+                  await updateItemTags(url, [...currentTags, newTag.trim()]);
+              }
+          }
+      }
+      loadItems();
+      chrome.runtime.sendMessage({ type: 'VECTOR_UPDATED' });
+  };
+
+  const handleBulkRemoveTag = async () => {
+      const tagToRemove = await showPrompt('選択したアイテムから削除するタグを入力してください:');
+      if (!tagToRemove || !tagToRemove.trim()) return;
+
+      if (!await showConfirm(`選択した ${selectedItems.size} 件のアイテムからタグ "${tagToRemove}" を削除しますか？`)) return;
+
+      setIsLoading(true);
+      for (const url of selectedItems) {
+          const item = items.find(i => i.url === url);
+          if (item && item.tags) {
+              const updatedTags = item.tags.filter(t => t !== tagToRemove.trim());
+              if (updatedTags.length !== item.tags.length) {
+                  await updateItemTags(url, updatedTags);
+              }
+          }
+      }
+      loadItems();
+      chrome.runtime.sendMessage({ type: 'VECTOR_UPDATED' });
+  };
+
+  const handleBulkDelete = async () => {
+      if (!await showConfirm(`選択した ${selectedItems.size} 件のページを削除しますか？この操作は取り消せません。`)) return;
+      
+      setIsLoading(true);
+      for (const url of selectedItems) {
+          await removeVector(url);
+      }
+      setSelectedItems(new Set());
+      loadItems();
+      chrome.runtime.sendMessage({ type: 'VECTOR_UPDATED' });
+  };
+
+  const handleAddTag = async (e: React.MouseEvent, item: VectorItem) => {
+      e.stopPropagation();
+      const newTag = await showPrompt('新しいタグを入力してください:');
+      if (newTag && newTag.trim()) {
+          const currentTags = item.tags || [];
+          if (!currentTags.includes(newTag.trim())) {
+              const updatedTags = [...currentTags, newTag.trim()];
+              await updateItemTags(item.url, updatedTags);
+              loadItems(); 
+              chrome.runtime.sendMessage({ type: 'VECTOR_UPDATED' });
+          }
+      }
+  };
+
+  const handleEditTag = async (e: React.MouseEvent, item: VectorItem, oldTag: string) => {
+      e.stopPropagation();
+      const newTag = await showPrompt('タグ名を変更してください:', oldTag);
+      if (newTag && newTag.trim() && newTag.trim() !== oldTag) {
+          const currentTags = item.tags || [];
+          const updatedTags = currentTags.map(t => t === oldTag ? newTag.trim() : t);
+          await updateItemTags(item.url, updatedTags);
+          loadItems();
+          chrome.runtime.sendMessage({ type: 'VECTOR_UPDATED' });
+      }
+  };
+
+  const handleTagClick = (e: React.MouseEvent, tag: string) => {
+      e.stopPropagation();
+      setSelectedTag(tag);
+  };
+
+  const handleRemoveTag = async (item: VectorItem, tagToRemove: string) => {
+      if (!await showConfirm(`タグ "${tagToRemove}" を削除しますか？`)) return;
+      const updatedTags = (item.tags || []).filter(t => t !== tagToRemove);
+      await updateItemTags(item.url, updatedTags);
+      loadItems();
+      chrome.runtime.sendMessage({ type: 'VECTOR_UPDATED' });
+  };
+
   const handleClearAll = async () => {
     if (items.length === 0) return;
-    if (confirm('ライブラリ内のすべての分析データを完全に削除しますか？\nこの操作は取り消せません。')) {
-        if (confirm('本当によろしいですか？バックアップが必要な場合は、先にエクスポートを実行してください。')) {
+    if (await showConfirm('ライブラリ内のすべての分析データを完全に削除しますか？\nこの操作は取り消せません。')) {
+        if (await showConfirm('本当によろしいですか？バックアップが必要な場合は、先にエクスポートを実行してください。')) {
             await clearAllVectors();
             loadItems();
             chrome.runtime.sendMessage({ type: 'VECTOR_UPDATED' });
@@ -147,21 +295,145 @@ export const SavedPages: React.FC<SavedPagesProps> = ({ onSelectUrl, className }
 
   const handleExport = async () => {
       try {
+          const fileName = await showPrompt('保存するファイル名を入力してください', 'twin-marks-library.json', 'バックアップのエクスポート');
+          if (!fileName) return; // Cancelled
+
           const json = await exportData();
           const blob = new Blob([json], { type: 'application/json' });
           const url = URL.createObjectURL(blob);
           const a = document.createElement('a');
-          a.href = url; a.download = `twin-marks-library.json`;
+          a.href = url;
+          // Ensure .json extension
+          a.download = fileName.endsWith('.json') ? fileName : `${fileName}.json`;
           document.body.appendChild(a); a.click(); document.body.removeChild(a);
           URL.revokeObjectURL(url);
-      } catch (e) { alert('エクスポートに失敗しました'); }
+      } catch (e) { await showAlert('エクスポートに失敗しました'); }
   };
 
+  const handleOrganizeTags = async () => {
+    if (allTags.length === 0) return;
+    
+    const settings = await chrome.storage.local.get(['geminiApiKey', 'generationModel']);
+    const apiKey = settings.geminiApiKey as string;
+    const modelName = (settings.generationModel || 'gemini-1.5-flash') as string;
+
+    if (!apiKey) {
+        await showAlert('先に設定でGemini APIキーを設定してください。');
+        return;
+    }
+
+    const countStr = await showPrompt(
+        '統合後の目標タグ数を入力してください。\n\n空白（または0）の場合は、表記揺れの統一のみ行います。\n数を指定すると（例: 5）、関連するタグを統合してその数に近づけます。',
+        undefined,
+        'タグ整理の設定'
+    );
+    
+    if (countStr === null) return;
+    
+    const targetCount = countStr.trim() ? parseInt(countStr.trim(), 10) : undefined;
+    if (countStr.trim() && (isNaN(targetCount!) || targetCount! < 0)) {
+        await showAlert('有効な数字を入力してください。');
+        return;
+    }
+
+    setIsLoading(true);
+    try {
+        const tagList = allTags.map(t => t.name);
+        const mapping = await optimizeTags(tagList, apiKey, modelName, targetCount && targetCount > 0 ? targetCount : undefined);
+        
+        if (Object.keys(mapping).length === 0) {
+            await showAlert('整理が必要なタグは見つかりませんでした。');
+            setIsLoading(false); // Make sure to stop loading
+            return;
+        }
+
+        setTagMapping(mapping);
+        setIsTagModalOpen(true);
+        setIsLoading(false); // Stop loading when modal opens
+    } catch (e) {
+        console.error(e);
+        await showAlert('タグの整理中にエラーが発生しました。');
+        setIsLoading(false);
+    } 
+  };
+
+  const handleApplyTags = async (finalMapping: Record<string, string>) => {
+      setIsTagModalOpen(false);
+      setIsLoading(true);
+      
+      try {
+            let updateCount = 0;
+            for (const item of items) {
+                if (!item.tags || item.tags.length === 0) continue;
+                
+                let changed = false;
+                const newTags = item.tags.map(tag => {
+                    if (finalMapping[tag]) {
+                        changed = true;
+                        return finalMapping[tag];
+                    }
+                    return tag;
+                });
+                
+                const uniqueNewTags = [...new Set(newTags)];
+                
+                if (changed || uniqueNewTags.length !== item.tags.length) {
+                    await updateItemTags(item.url, uniqueNewTags);
+                    updateCount++;
+                }
+            }
+            
+            await showAlert(`${updateCount} 件のアイテムのタグを更新しました。`);
+            loadItems();
+            chrome.runtime.sendMessage({ type: 'VECTOR_UPDATED' });
+      } catch(e) {
+          console.error(e);
+          await showAlert('タグの更新に失敗しました。');
+      } finally {
+          setIsLoading(false);
+      }
+  };
+
+  const handleSyncCategories = async () => {
+    const settings = await chrome.storage.local.get(['geminiApiKey', 'generationModel']);
+    const apiKeyStr = (settings.geminiApiKey as string) || '';
+    if (!apiKeyStr) {
+        await showAlert('先に設定でAPIキーを設定してください。');
+        return;
+    }
+    
+    setIsSyncing(true);
+    try {
+        await syncCategories(apiKeyStr, (settings.generationModel as string) || 'gemini-1.5-flash');
+        await showAlert('全20カテゴリの再編が完了しました。RAG検索の精度が向上します。');
+        loadItems(); // Refresh category stats
+    } catch (e: any) {
+        console.error(e);
+        const errorMsg = e?.message || '';
+        if (errorMsg.includes('429') || errorMsg.includes('quota')) {
+            await showAlert('APIのクォータ制限（回数制限）を超えました。しばらく待ってから再度お試しください。');
+        } else {
+            await showAlert('カテゴリ同期に失敗しました。詳細はコンソールを確認してください。');
+        }
+    } finally {
+        setIsSyncing(false);
+    }
+  };
+
+  const tagCountMap = React.useMemo(() => {
+    const map: Record<string, number> = {};
+    allTags.forEach(tag => {
+        map[tag.name] = tag.count;
+    });
+    return map;
+  }, [allTags]);
+
   return (
-    <div className={`flex flex-col h-full bg-slate-950 ${className}`}>
+    <div className={`flex flex-col h-full bg-slate-950 ${className}`}> 
       <input type="file" ref={fileInputRef} onChange={handleFileChange} accept=".json" className="hidden" />
       
-      <div className="flex flex-col space-y-4 px-6 py-4 border-b border-slate-800 bg-slate-900/50">
+      {/* Header */}
+      <div className="flex flex-col space-y-4 px-6 py-4 border-b border-slate-800 bg-slate-900/50 flex-none">
         <div className="flex items-center justify-between">
             <div className="flex items-center gap-3">
                 <div className={`p-2 rounded-lg border bg-blue-500/10 border-blue-500/20 shadow-[0_0_15px_rgba(59,130,246,0.1)]`}>
@@ -171,13 +443,38 @@ export const SavedPages: React.FC<SavedPagesProps> = ({ onSelectUrl, className }
                     <h2 className="text-lg font-bold text-slate-100 italic tracking-tight flex items-center gap-2">
                     AI LIBRARY <span className="text-[10px] bg-blue-600/20 text-blue-400 px-1.5 py-0.5 rounded border border-blue-500/30 font-normal not-italic">HISTORY</span>
                     </h2>
-                    <p className="text-xs text-slate-500">
-                    {items.length} 分析済みのページ
-                    </p>
+                    <div className="flex items-center gap-3">
+                        <p className="text-xs text-slate-500">
+                        {items.length} 分析済みのページ
+                        </p>
+                        <button 
+                            onClick={() => setShowCategories(!showCategories)}
+                            className={`flex items-center gap-1.5 px-2 py-0.5 rounded-md text-[10px] font-bold transition-all border ${showCategories ? 'bg-purple-600/20 text-purple-400 border-purple-500/30 shadow-[0_0_10px_rgba(168,85,247,0.2)]' : 'bg-slate-800 text-slate-400 border-slate-700 hover:border-purple-500/40'}`}
+                        >
+                            <FolderOpen size={10} />
+                            AIカテゴリ {showCategories ? 'を閉じる' : 'を表示'}
+                        </button>
+                    </div>
                 </div>
             </div>
 
             <div className="flex items-center gap-2">
+                <button 
+                    onClick={() => setIsOrganizeOpen(true)}
+                    className="flex items-center gap-1.5 px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700 rounded-lg transition-all text-[10px] font-bold"
+                >
+                    <FolderOutput size={14} className="text-yellow-500" />
+                    自動整理
+                </button>
+                <button 
+                    onClick={handleSyncCategories}
+                    disabled={isSyncing}
+                    className={`flex items-center gap-1.5 px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700 rounded-lg transition-all text-[10px] font-bold ${isSyncing ? 'animate-pulse' : ''}`}
+                >
+                    <RefreshCw size={14} className={`text-blue-400 ${isSyncing ? 'animate-spin' : ''}`} />
+                    同期
+                </button>
+                <div className="w-px h-6 bg-slate-800 mx-1" />
                 <button onClick={handleImportClick} className="group flex items-center gap-2 px-3 py-1.5 bg-blue-600 hover:bg-blue-500 text-white text-xs font-bold rounded-lg transition-all shadow-lg shadow-blue-900/20">
                     <Upload size={14} className="group-hover:-translate-y-0.5 transition-transform" /> 履歴を取り込む
                 </button>
@@ -194,8 +491,74 @@ export const SavedPages: React.FC<SavedPagesProps> = ({ onSelectUrl, className }
             </div>
         </div>
 
-        <div className="flex items-center justify-between gap-4">
-          <div className="relative flex-1 max-w-md">
+        {/* Collapsible AI Categories Panel */}
+        {showCategories && (
+          <div className="bg-slate-900/80 border border-purple-500/20 rounded-xl p-4 animate-in fade-in slide-in-from-top-2 duration-200 shadow-xl backdrop-blur-sm">
+            <div className="flex items-center justify-between mb-3 px-1">
+              <div className="flex items-center gap-2">
+                <Sparkles size={12} className="text-purple-400" />
+                <span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Select AI Category for Filtering</span>
+              </div>
+              {selectedCategory && (
+                <button 
+                  onClick={() => setSelectedCategory(null)}
+                  className="text-[10px] text-purple-400 hover:text-purple-300 font-bold"
+                >
+                  フィルター解除
+                </button>
+              )}
+            </div>
+            <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-2">
+              <button 
+                onClick={() => setSelectedCategory(null)}
+                className={`flex items-center justify-between px-3 py-2 rounded-lg text-[11px] transition-all border ${!selectedCategory ? 'bg-purple-600 text-white border-purple-500 shadow-lg shadow-purple-900/40 font-bold' : 'bg-slate-950/50 text-slate-400 border-slate-800 hover:border-slate-700'}`}
+              >
+                <span>すべて</span>
+                <span className="opacity-50">({items.length})</span>
+              </button>
+              {allCategories.map(cat => (
+                <button 
+                  key={cat.name}
+                  onClick={() => setSelectedCategory(selectedCategory === cat.name ? null : cat.name)}
+                  className={`flex items-center justify-between px-3 py-2 rounded-lg text-[11px] transition-all border ${selectedCategory === cat.name 
+                    ? 'bg-purple-600 text-white border-purple-500 shadow-lg shadow-purple-900/40 font-bold' 
+                    : 'bg-slate-950/50 text-slate-400 border-slate-800 hover:border-slate-700'}`}
+                >
+                  <span className="truncate pr-2">{cat.name}</span>
+                  <span className={`opacity-60 text-[9px] ${selectedCategory === cat.name ? 'text-white' : 'text-slate-500'}`}>({cat.count})</span>
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {/* Bulk Actions & Search Bar Area */}
+        <div className="space-y-3">
+            {selectedItems.size > 0 && (
+                <div className="flex items-center justify-between bg-blue-500/10 border border-blue-500/20 rounded-xl px-4 py-2 animate-in slide-in-from-top-2">
+                    <div className="flex items-center gap-3">
+                        <button onClick={toggleSelectAll} className="flex items-center gap-2 text-xs font-bold text-blue-400 hover:text-white transition-colors">
+                            {selectedItems.size === displayItems.length ? <CheckSquare size={16} /> : <Minus size={16} />}
+                            {selectedItems.size} 件選択中
+                        </button>
+                    </div>
+                    <div className="flex items-center gap-2">
+                        <button onClick={handleBulkAddTag} className="flex items-center gap-1.5 px-3 py-1.5 bg-blue-600 hover:bg-blue-500 text-white text-xs font-bold rounded-lg transition-all">
+                            <Plus size={14} /> タグ追加
+                        </button>
+                        <button onClick={handleBulkRemoveTag} className="flex items-center gap-1.5 px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-bold rounded-lg transition-all">
+                            <Minus size={14} /> タグ削除
+                        </button>
+                        <div className="w-px h-4 bg-blue-500/30 mx-1" />
+                        <button onClick={handleBulkDelete} className="flex items-center gap-1.5 px-3 py-1.5 bg-rose-500/20 hover:bg-rose-500 text-rose-400 hover:text-white text-xs font-bold rounded-lg transition-all">
+                            <Trash2 size={14} /> 削除
+                        </button>
+                    </div>
+                </div>
+            )}
+
+            <div className="flex items-center justify-between gap-4">
+            <div className="relative flex-1 max-w-md">
               <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-600" size={12} />
               <input 
                 type="text" 
@@ -237,8 +600,60 @@ export const SavedPages: React.FC<SavedPagesProps> = ({ onSelectUrl, className }
               <button onClick={() => setViewMode('grid')} className={`p-1.5 rounded-md ${viewMode === 'grid' ? 'bg-slate-800 text-blue-400 shadow-sm' : 'text-slate-600 hover:text-slate-400'}`}><Grid size={14} /></button>
           </div>
         </div>
+
+        {/* Tag Cloud / Filter */}
+        {allTags.length > 0 && (
+            <div className="flex flex-wrap gap-2 pt-2 border-t border-slate-800/50">
+                <div className="flex items-center justify-between w-full mb-1">
+                    <div className="text-[10px] text-slate-500 font-bold uppercase tracking-wider flex items-center gap-1">
+                        <TagIcon size={10} />
+                        Tags:
+                    </div>
+                    <button 
+                        onClick={handleOrganizeTags}
+                        className="flex items-center gap-1 text-[10px] text-purple-400 hover:text-purple-300 transition-colors"
+                        title="タグをAIで整理"
+                    >
+                        <Wand2 size={10} />
+                        タグ整理
+                    </button>
+                </div>
+                {selectedTag && (
+                    <button 
+                        onClick={() => setSelectedTag(null)}
+                        className="flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] bg-blue-600 text-white hover:bg-blue-500 transition-colors"
+                    >
+                        <Plus size={10} className="rotate-45" />
+                        Tag Filter: {selectedTag}
+                    </button>
+                )}
+                {selectedCategory && (
+                    <button 
+                        onClick={() => setSelectedCategory(null)}
+                        className="flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] bg-purple-600 text-white hover:bg-purple-500 transition-colors"
+                    >
+                        <Plus size={10} className="rotate-45" />
+                        AI Category: {selectedCategory}
+                    </button>
+                )}
+                {allTags.map(tag => (
+                    <button
+                        key={tag.name}
+                        onClick={() => setSelectedTag(selectedTag === tag.name ? null : tag.name)}
+                        className={`px-2 py-0.5 rounded-full text-[10px] border transition-all ${selectedTag === tag.name 
+                            ? 'bg-blue-500/20 border-blue-500/50 text-blue-300' 
+                            : 'bg-slate-900 border-slate-700 text-slate-400 hover:border-slate-500 hover:text-slate-300'
+                        }`}
+                    >
+                        {tag.name} <span className="opacity-50 ml-0.5">({tag.count})</span>
+                    </button>
+                ))}
+            </div>
+        )}
+      </div>
       </div>
 
+      {/* Main Content Area */}
       <div className="flex-1 overflow-y-auto p-6 scrollbar-thin scrollbar-thumb-slate-800">
         {isLoading ? (
           <div className="flex flex-col items-center justify-center h-full gap-3 text-slate-500">
@@ -256,44 +671,57 @@ export const SavedPages: React.FC<SavedPagesProps> = ({ onSelectUrl, className }
           </div>
         ) : viewMode === 'list' ? (
           <div className="space-y-2 max-w-5xl mx-auto">
-            {displayItems.map((item: VectorItem) => (
-              <div key={item.url} onClick={() => onSelectUrl(item.url)} className="group flex items-center gap-4 p-3 bg-slate-900/20 hover:bg-slate-900/60 border border-slate-800/50 rounded-xl transition-all hover:border-blue-500/20 cursor-pointer shadow-sm">
-                <img src={`https://www.google.com/s2/favicons?domain=${new URL(item.url).hostname}&sz=64`} alt="" className="w-10 h-10 p-2 rounded-lg bg-slate-950 object-contain border border-slate-800 group-hover:border-blue-500/30 transition-colors" onError={(e) => { (e.target as HTMLImageElement).src = 'data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5"/></svg>'; }} />
-                <div className="flex-1 min-w-0">
-                  <div className={`text-sm font-bold truncate group-hover:text-blue-400 transition-colors text-slate-300`}>{item.title}</div>
-                  <div className="text-[10px] text-slate-500 truncate font-mono mt-0.5 opacity-60">{item.url}</div>
-                </div>
-                <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
-                  <button onClick={(e) => handleOpenInNewTab(e, item.url)} className="p-2 text-slate-600 hover:text-blue-400 hover:bg-slate-800 rounded-lg transition-colors"><ExternalLink size={16} /></button>
-                  <button onClick={(e) => handleDelete(e, item.url)} className="p-2 text-slate-600 hover:text-rose-400 hover:bg-rose-500/10 rounded-lg transition-colors" title="削除"><Trash2 size={16} /></button>
-                </div>
-              </div>
+            {displayItems.map((item) => (
+                <ListViewItem 
+                    key={item.url} 
+                    item={item} 
+                    selected={selectedItems.has(item.url)}
+                    onToggle={toggleSelection}
+                    onSelect={onSelectUrl}
+                    onOpen={handleOpenInNewTab}
+                    onDelete={handleDelete}
+                    onAddTag={handleAddTag}
+                    onRemoveTag={handleRemoveTag}
+                    onEditTag={handleEditTag}
+                    onTagClick={handleTagClick}
+                    tagCounts={tagCountMap}
+                />
             ))}
           </div>
-        ) : (
+        ) : ( /* viewMode === 'grid' */
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
-            {displayItems.map((item: VectorItem) => (
-              <div key={item.url} onClick={() => onSelectUrl(item.url)} className="group flex flex-col p-4 bg-slate-900/30 hover:bg-slate-900 border border-slate-800/80 rounded-2xl transition-all hover:border-blue-500/30 cursor-pointer shadow-lg relative overflow-hidden">
-                <div className={`absolute top-0 left-0 w-full h-1 bg-blue-500/10 group-hover:bg-blue-500/40 transition-colors`} />
-                <div className="flex items-start justify-between mb-3">
-                   <img src={`https://www.google.com/s2/favicons?domain=${new URL(item.url).hostname}&sz=64`} alt="" className="w-12 h-12 p-2.5 rounded-xl bg-slate-950 object-contain border border-slate-800 shadow-inner group-hover:border-blue-500/30 transition-colors" onError={(e) => { (e.target as HTMLImageElement).src = 'data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5"/></svg>'; }} />
-                   <div className="flex gap-1">
-                    <button onClick={(e) => handleOpenInNewTab(e, item.url)} className="p-1.5 text-slate-700 hover:text-blue-400 transition-colors"><ExternalLink size={14} /></button>
-                    <button onClick={(e) => handleDelete(e, item.url)} className="p-1.5 text-slate-700 hover:text-rose-400 transition-colors"><Trash2 size={14} /></button>
-                   </div>
-                </div>
-                <div className="flex-1 flex flex-col">
-                  <h3 className={`text-sm font-bold line-clamp-2 leading-tight group-hover:text-blue-400 transition-colors mb-2 text-slate-300`}>{item.title}</h3>
-                  {item.description && <p className="text-[11px] text-slate-500 line-clamp-3 mb-2 flex-1 leading-relaxed">{item.description}</p>}
-                  <div className="pt-3 border-t border-slate-800/50 flex items-center justify-between">
-                    <span className="text-[10px] text-slate-600 font-mono truncate max-w-[120px]">{new URL(item.url).hostname}</span>
-                  </div>
-                </div>
-              </div>
+            {displayItems.map((item) => (
+                <GridViewItem 
+                    key={item.url} 
+                    item={item} 
+                    selected={selectedItems.has(item.url)}
+                    onToggle={toggleSelection}
+                    onSelect={onSelectUrl}
+                    onOpen={handleOpenInNewTab}
+                    onDelete={handleDelete}
+                    onAddTag={handleAddTag}
+                    onRemoveTag={handleRemoveTag}
+                    onEditTag={handleEditTag}
+                    onTagClick={handleTagClick}
+                    tagCounts={tagCountMap}
+                />
             ))}
           </div>
         )}
       </div>
+
+      <TagOptimizationModal 
+        isOpen={isTagModalOpen}
+        initialMapping={tagMapping}
+        onClose={() => setIsTagModalOpen(false)}
+        onApply={handleApplyTags}
+      />
+
+      <AutoOrganizeModal 
+        isOpen={isOrganizeOpen}
+        onClose={() => setIsOrganizeOpen(false)}
+      />
     </div>
   );
 };
+        

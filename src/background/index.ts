@@ -8,6 +8,23 @@ chrome.action.onClicked.addListener(() => {
   chrome.tabs.create({ url: 'index.html' });
 });
 
+// Helper functions to safely update badge (ignoring errors if tab is closed)
+const safeSetBadgeText = async (details: chrome.action.BadgeTextDetails) => {
+    try {
+        await chrome.action.setBadgeText(details);
+    } catch (e) {
+        // Tab might be closed, ignore
+    }
+};
+
+const safeSetBadgeBackgroundColor = async (details: { tabId?: number; color: string | [number, number, number, number] }) => {
+    try {
+        await chrome.action.setBadgeBackgroundColor(details);
+    } catch (e) {
+        // Tab might be closed, ignore
+    }
+};
+
 // コンテキストメニューの作成関数
 function createContextMenus() {
   chrome.contextMenus.removeAll(() => {
@@ -48,8 +65,8 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
         return;
       }
 
-      await chrome.action.setBadgeText({ tabId: tab.id, text: '...' });
-      await chrome.action.setBadgeBackgroundColor({ tabId: tab.id, color: '#3B82F6' });
+      await safeSetBadgeText({ tabId: tab.id, text: '...' });
+      await safeSetBadgeBackgroundColor({ tabId: tab.id, color: '#3B82F6' });
 
       // 制限されたURLのチェック
       if (tab.url?.startsWith('chrome://') || tab.url?.startsWith('https://chrome.google.com/webstore')) {
@@ -106,12 +123,20 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
       // 3. AI処理（並列実行）
       let generatedDescription = "";
       
-      if (screenshotData) {
+      // Check if model supports multimodal (simple heuristic)
+      const isMultimodalModel = genModelName.includes('gemini-1.5') || genModelName.includes('vision');
+      
+      if (screenshotData && isMultimodalModel) {
           // 画像がある場合（マルチモーダル）
           const descriptionPrompt = `
 以下のWebページの画像（スクリーンショット）とテキスト内容から、このページが何について書かれているか、どのようなコンテンツ（記事、ツール、図表、ログイン画面など）であるか、日本語で詳細に説明してください。
-特に、画像内の図やグラフ、UI要素などの視覚情報も考慮してください。
-もしログイン画面や「読み込み中」に見える場合でも、背景やタイトルから本来の目的（例: 「〇〇というサービスのダッシュボード」）を推測してください。
+また、このページの内容を表す**大まかなカテゴリタグ**を3〜5個生成してください。
+タグは細かい固有名詞（例: "React 19", "iPhone 15 Pro"）ではなく、**一般的な分類**（例: "Web開発", "スマートフォン", "ニュース", "プログラミング", "デザイン", "AI", "ビジネス"）を選んでください。
+
+出力形式:
+[説明文]
+---TAGS---
+[タグ1, タグ2, タグ3]
 
 タイトル: ${title}
 URL: ${url}
@@ -129,7 +154,18 @@ URL: ${url}
       if (!generatedDescription) {
            try {
                generatedDescription = await generateText(
-                  `以下のWebページのテキスト内容を、日本語で50文字以内で簡潔に要約・説明してください。\n\nタイトル: ${title}\nURL: ${url}\n\n${text.substring(0, 5000)}`,
+                  `以下のWebページのテキスト内容を、日本語で50文字以内で簡潔に要約・説明してください。また、内容を表す**大まかなカテゴリタグ**を3〜5個生成してください。
+タグは細かい固有名詞ではなく、**一般的な分類**（例: "技術", "ニュース", "生活", "ショッピング", "学習"）を選んでください。
+
+出力形式:
+[説明文]
+---TAGS---
+[タグ1, タグ2, タグ3]
+
+タイトル: ${title}
+URL: ${url}
+
+${text.substring(0, 5000)}`,
                   apiKey,
                   genModelName
                );
@@ -139,7 +175,18 @@ URL: ${url}
            }
       }
 
-      console.log("Generated Description:", generatedDescription);
+      console.log("Generated Content:", generatedDescription);
+      
+      // Parse description and tags
+      let description = generatedDescription;
+      let tags: string[] = [];
+      
+      if (generatedDescription.includes('---TAGS---')) {
+          const parts = generatedDescription.split('---TAGS---');
+          description = parts[0].trim();
+          const tagPart = parts[1].trim().replace(/^[\[\]]$/g, ''); // Remove brackets if present
+          tags = tagPart.split(/,|、/).map(t => t.trim()).filter(t => t.length > 0);
+      }
 
       const embeddingPromise = (async () => {
           let vector: number[] | null = null;
@@ -154,9 +201,9 @@ URL: ${url}
           const uniqueModels = Array.from(new Set(candidateModels));
 
           // ベクトル化の対象: 生成された説明文があればそれを優先、なければタイトルと説明の組み合わせ
-          const textToEmbed = (generatedDescription.length > 50) 
-              ? generatedDescription 
-              : `${title}\n${generatedDescription}\nContext: ${text.substring(0, 1000)}`;
+          const textToEmbed = (description.length > 50) 
+              ? description 
+              : `${title}\n${description}\nContext: ${text.substring(0, 1000)}`;
 
           for (const m of uniqueModels) {
               try {
@@ -178,28 +225,47 @@ URL: ${url}
 
       // 要約（表示用）
       const summaryPromise = (async () => {
-          if (generatedDescription.length < 100) return generatedDescription;
+          if (description.length < 100) return description;
           // 長すぎる場合は表示用に短縮（すでにテキストのみ生成の場合は短いのでスキップ可能だが念のため）
           return generateText(
-              `以下の文章を50文字以内で要約してください。\n\n${generatedDescription}`, 
-              apiKey, 
+              `以下の文章を50文字以内で要約してください。
+
+${description}`,
+              apiKey,
               genModelName
-          ).catch(() => generatedDescription.substring(0, 100));
+          ).catch(() => description.substring(0, 100));
       })();
 
       const [vector, shortSummary] = await Promise.all([embeddingPromise, summaryPromise]);
       
-      await storeVector(url, title, vector, text, shortSummary, true);
+      // Generate semantic vector based on long description + tags
+      let semanticVector: number[] | undefined;
+      try {
+          const textToEmbed = `${description.substring(0, 1000)}\nTags: ${tags.join(', ')}`;
+          const candidateModels = [embedModelName, 'models/embedding-001'];
+          for (const m of candidateModels) {
+              try {
+                  semanticVector = await getEmbedding(textToEmbed, apiKey, m);
+                  break;
+              } catch (e) {
+                  console.warn(`Semantic embed failed with ${m}`, e);
+              }
+          }
+      } catch (e) {
+          console.error("Failed to generate semantic vector", e);
+      }
+      
+      await storeVector(url, title, vector, text, shortSummary, true, tags, semanticVector);
       chrome.runtime.sendMessage({ type: 'VECTOR_UPDATED' }).catch(() => {});
 
-      await chrome.action.setBadgeText({ tabId: tab.id, text: 'OK' });
-      await chrome.action.setBadgeBackgroundColor({ tabId: tab.id, color: '#10B981' }); 
-      setTimeout(() => chrome.action.setBadgeText({ tabId: tab.id, text: '' }), 3000);
+      await safeSetBadgeText({ tabId: tab.id, text: 'OK' });
+      await safeSetBadgeBackgroundColor({ tabId: tab.id, color: '#10B981' }); 
+      setTimeout(() => safeSetBadgeText({ tabId: tab.id, text: '' }), 3000);
 
     } catch (error) {
       console.error('Analysis failed:', error);
-      await chrome.action.setBadgeText({ tabId: tab.id, text: 'ERR' });
-      await chrome.action.setBadgeBackgroundColor({ tabId: tab.id, color: '#F43F5E' });
+      await safeSetBadgeText({ tabId: tab.id, text: 'ERR' });
+      await safeSetBadgeBackgroundColor({ tabId: tab.id, color: '#F43F5E' });
     } finally {
        await chrome.storage.local.set({ analyzing: false });
     }
@@ -209,20 +275,20 @@ URL: ${url}
 // タブの状態監視と未分析通知
 const checkTabStatus = async (tabId: number, url?: string) => {
     if (!url || !url.startsWith('http')) {
-        await chrome.action.setBadgeText({ tabId, text: '' });
+        await safeSetBadgeText({ tabId, text: '' });
         return;
     }
     const settings = await chrome.storage.local.get(['notifyUnanalyzed', 'analyzing']);
     if (settings.analyzing) return;
     const data = await getVector(url);
     if (data) {
-        await chrome.action.setBadgeText({ tabId, text: '' });
+        await safeSetBadgeText({ tabId, text: '' });
     } else {
         if (settings.notifyUnanalyzed !== false) {
-            await chrome.action.setBadgeText({ tabId, text: '?' });
-            await chrome.action.setBadgeBackgroundColor({ tabId, color: '#EAB308' }); 
+            await safeSetBadgeText({ tabId, text: '?' });
+            await safeSetBadgeBackgroundColor({ tabId, color: '#EAB308' }); 
         } else {
-            await chrome.action.setBadgeText({ tabId, text: '' });
+            await safeSetBadgeText({ tabId, text: '' });
         }
     }
 };

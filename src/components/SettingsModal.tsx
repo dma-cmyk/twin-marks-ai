@@ -21,23 +21,35 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose })
   const [settings, setSettings] = useState<AppSettings>({
     apiKey: '',
     embeddingModel: 'models/embedding-001',
-    generationModel: 'models/gemini-1.5-flash',
+    generationModel: 'models/gemini-2.5-flash-lite',
     extractionEngine: 'defuddle',
     notifyUnanalyzed: true,
     useImageAnalysis: false,
   });
   const [isLoading, setIsLoading] = useState(false);
   const [statusMsg, setStatusMsg] = useState('');
-  const [genModels, setGenModels] = useState<string[]>(['models/gemini-1.5-flash', 'models/gemini-1.5-pro', 'models/gemini-1.0-pro']);
-  const [embedModels, setEmbedModels] = useState<string[]>(['models/text-embedding-004', 'models/embedding-001']);
+  const [genModels, setGenModels] = useState<string[]>(['models/gemini-2.5-flash-lite', 'models/gemini-1.5-flash', 'models/gemini-1.5-pro']);
+  const [embedModels, setEmbedModels] = useState<string[]>(['models/embedding-001', 'models/text-embedding-004']);
 
   useEffect(() => {
-    // Load settings from storage
-    chrome.storage?.local.get(['geminiApiKey', 'embeddingModel', 'generationModel', 'extractionEngine', 'notifyUnanalyzed', 'useImageAnalysis'], (result) => {
+    // Load settings and model lists from storage
+    chrome.storage?.local.get([
+      'geminiApiKey', 
+      'embeddingModel', 
+      'generationModel', 
+      'extractionEngine', 
+      'notifyUnanalyzed', 
+      'useImageAnalysis',
+      'lastGenModels',
+      'lastEmbedModels'
+    ], (result) => {
+      if (result.lastGenModels) setGenModels(result.lastGenModels as string[]);
+      if (result.lastEmbedModels) setEmbedModels(result.lastEmbedModels as string[]);
+
       setSettings({
         apiKey: (result.geminiApiKey as string) || '',
-        embeddingModel: (result.embeddingModel as string) || 'models/text-embedding-004',
-        generationModel: (result.generationModel as string) || 'models/gemini-1.5-flash',
+        embeddingModel: (result.embeddingModel as string) || 'models/embedding-001',
+        generationModel: (result.generationModel as string) || 'models/gemini-2.5-flash-lite',
         extractionEngine: (result.extractionEngine as 'defuddle' | 'turndown') || 'defuddle',
         notifyUnanalyzed: result.notifyUnanalyzed !== undefined ? (result.notifyUnanalyzed as boolean) : true,
         useImageAnalysis: result.useImageAnalysis !== undefined ? (result.useImageAnalysis as boolean) : false,
@@ -90,6 +102,12 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose })
           setGenModels(generation);
           setEmbedModels(embedding);
           
+          // Save model lists to storage for persistence
+          chrome.storage?.local.set({
+            lastGenModels: generation,
+            lastEmbedModels: embedding
+          });
+
           setStatusMsg(`モデルを${allModels.length}件見つけました。`);
       } else {
           setStatusMsg('接続済みですが、モデルは見つかりませんでした。');

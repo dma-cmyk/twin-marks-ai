@@ -2,6 +2,7 @@ import React, { useEffect, useState, useRef } from 'react';
 import { getSubTree, checkLink, getBookmark, removeBookmark, updateBookmark, moveBookmark, searchBookmarks } from '../utils/bookmarkService';
 import type { BookmarkNode } from '../utils/bookmarkService';
 import { Folder, FileText, ArrowLeft, CheckCircle2, XCircle, Loader2, Trash2, Edit2, Copy, CheckSquare, Square, ExternalLink, Search, X } from 'lucide-react';
+import { useDialog } from '../context/DialogContext';
 
 interface BookmarkListProps {
   folderId: string;
@@ -16,6 +17,7 @@ type LinkStatus = 'idle' | 'loading' | 'ok' | 'error';
 type ViewMode = 'folder' | 'search';
 
 export const BookmarkList: React.FC<BookmarkListProps> = ({ folderId, onNavigate, onSelectUrl, className, title, selectedUrl }) => {
+  const { showConfirm } = useDialog();
   const [bookmarks, setBookmarks] = useState<BookmarkNode[]>([]); // Folder contents
   const [searchResults, setSearchResults] = useState<BookmarkNode[]>([]); // Search results
   const [viewMode, setViewMode] = useState<ViewMode>('folder');
@@ -138,7 +140,7 @@ export const BookmarkList: React.FC<BookmarkListProps> = ({ folderId, onNavigate
 
   const handleDelete = async (e: React.MouseEvent, id: string) => {
     e.stopPropagation();
-    if (confirm('Are you sure you want to delete this?')) {
+    if (await showConfirm('Are you sure you want to delete this?')) {
         await removeBookmark(id);
         if (viewMode === 'search') {
             // Refresh search results manually or wait for event?
@@ -151,7 +153,7 @@ export const BookmarkList: React.FC<BookmarkListProps> = ({ folderId, onNavigate
 
   const handleBulkDelete = async () => {
       if (selectedIds.size === 0) return;
-      if (confirm(`Are you sure you want to delete ${selectedIds.size} items?`)) {
+      if (await showConfirm(`Are you sure you want to delete ${selectedIds.size} items?`)) {
           await Promise.all(Array.from(selectedIds).map(id => removeBookmark(id)));
           setSelectedIds(new Set());
           if (viewMode === 'search') {

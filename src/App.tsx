@@ -5,9 +5,8 @@ import { SettingsModal } from './components/SettingsModal';
 import { NetworkGraph } from './components/NetworkGraph';
 import { NetworkGraph3D } from './components/NetworkGraph3D';
 import { SavedPages } from './components/SavedPages';
-import { AutoOrganizeModal } from './components/AutoOrganizeModal'; // Import
 import { getTree } from './utils/bookmarkService';
-import { ExternalLink, Layout, Maximize2, Zap, Settings, BrainCircuit, Loader2, Network, List, FolderOutput, Box, BookmarkCheck } from 'lucide-react'; // Import List and FolderOutput
+import { ExternalLink, Layout, Maximize2, Zap, Settings, BrainCircuit, Loader2, Network, List, Box, BookmarkCheck } from 'lucide-react';
 import { Panel, Group as PanelGroup, Separator as PanelResizeHandle } from 'react-resizable-panels';
 
 function App() {
@@ -15,7 +14,6 @@ function App() {
   const [rightFolderId, setRightFolderId] = useState<string | null>(null);
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
-  const [isOrganizeOpen, setIsOrganizeOpen] = useState(false); // New state
   const [activeTab, setActiveTab] = useState<'explorer' | 'ai' | 'saved_pages'>('explorer');
   const [aiViewMode, setAiViewMode] = useState<'list' | 'graph' | 'graph3d'>('list');
   const [isAnalyzing, setIsAnalyzing] = useState(false);
@@ -167,7 +165,7 @@ function App() {
                                               onNavigate={setLeftFolderId}
                                               onSelectUrl={(url) => setPreviewUrl(url)}
                                               className="h-full border-none rounded-none"
-                                              selectedUrl={previewUrl}
+                                              selectedUrl={previewUrl || undefined}
                                           />
                                       </div>
                                   </Panel>
@@ -184,7 +182,7 @@ function App() {
                                               onNavigate={setRightFolderId}
                                               onSelectUrl={(url) => setPreviewUrl(url)}
                                               className="h-full border-none rounded-none"
-                                              selectedUrl={previewUrl}
+                                              selectedUrl={previewUrl || undefined}
                                           />
                                       </div>
                                   </Panel>
@@ -199,10 +197,11 @@ function App() {
                               <div className="h-full bg-slate-900 border-t border-slate-800 shadow-[0_-4px_20px_rgba(0,0,0,0.4)] z-10 flex flex-col">
                                   <div className="flex items-center justify-between px-6 py-2 bg-slate-900 border-b border-slate-800 h-10 select-none flex-none">
                                       <div className="flex items-center gap-2 max-w-[70%]">
-                                          <div className={`w-2 h-2 rounded-full ${previewUrl ? 'bg-green-500 shadow-[0_0_8px_rgba(34,197,94,0.6)]' : 'bg-slate-700'}`} />
-                                          <span className="text-xs font-mono text-slate-400 truncate">
-                                              {previewUrl || '選択を待機中...'}
-                                          </span>
+                                           <div className={`w-2 h-2 rounded-full ${previewUrl ? 'bg-green-500 shadow-[0_0_8px_rgba(34,197,94,0.6)]' : 'bg-slate-700'}`} />
+                                           <span className="text-[10px] font-bold text-slate-500 uppercase tracking-tighter">Status:</span>
+                                           <span className="text-xs font-mono text-slate-400 truncate">
+                                               {previewUrl || '選択を待機中...'}
+                                           </span>
                                       </div>
 
                                       {previewUrl && (
@@ -242,17 +241,9 @@ function App() {
               } else if (activeTab === 'ai') {
                   content = (
                       // === AI Search View ===
-                      <div className="flex-1 p-4 overflow-hidden flex flex-col items-center justify-start bg-slate-950 relative">
-                          {/* View Mode Toggle (Floating or Fixed) */}
-                          <div className="absolute top-4 right-6 z-10 flex gap-3">
-                              <button
-                                  onClick={() => setIsOrganizeOpen(true)}
-                                  className="flex items-center gap-2 px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-lg border border-slate-700 transition-colors text-xs font-medium"
-                              >
-                                  <FolderOutput size={14} className="text-yellow-500" />
-                                  自動整理
-                              </button>
-
+                       <div className="flex-1 p-4 overflow-hidden flex flex-col items-center justify-start bg-slate-950 relative">
+                           {/* View Mode Toggle (Floating Bottom Center) */}
+                           <div className="absolute bottom-6 left-1/2 -translate-x-1/2 z-30 flex gap-3">
                               <div className="flex bg-slate-900 border border-slate-700 rounded-lg p-1 shadow-lg">
                                   <button
                                       onClick={() => setAiViewMode('list')}
@@ -282,6 +273,7 @@ function App() {
                               {aiViewMode === 'list' ? (
                                   <RelatedLinksList
                                       targetUrl={previewUrl || undefined}
+                                      targetTitle={undefined} // 本来は選択中アイテムのタイトルを渡したいが、現在はURLのみ保持しているため将来を見据えて空で渡す
                                       onSelectUrl={(url) => setPreviewUrl(url)}
                                       className="flex-1 border-none shadow-2xl shadow-purple-900/10"
                                   />
@@ -322,7 +314,6 @@ function App() {
       </div>
       
       <SettingsModal isOpen={isSettingsOpen} onClose={() => setIsSettingsOpen(false)} />
-      <AutoOrganizeModal isOpen={isOrganizeOpen} onClose={() => setIsOrganizeOpen(false)} />
     </div>
   );
 }

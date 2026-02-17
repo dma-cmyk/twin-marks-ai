@@ -1,0 +1,1160 @@
+import React, { useEffect, useState, useRef, useCallback } from 'react';
+import ForceGraph3D from 'react-force-graph-3d';
+import type { ForceGraphMethods, LinkObject, NodeObject } from 'react-force-graph-3d';
+import { getAllVectors } from '../utils/vectorStore';
+import { getEmbedding } from '../utils/embedding';
+import { similarity } from 'ml-distance';
+import { kmeans } from 'ml-kmeans';
+import { Loader2, Search, X, Settings2, Minimize2, RotateCw, ChevronLeft, ChevronRight } from 'lucide-react';
+import * as THREE from 'three';
+import { useDialog } from '../context/DialogContext';
+
+interface NetworkGraph3DProps {
+  onNodeClick: (url: string) => void;
+  className?: string;
+}
+
+// ... CustomNode, CustomLink, GraphData interfaces ...
+interface CustomNode extends NodeObject {
+  id: string;
+  title: string;
+  url: string;
+  val: number;
+  vector?: number[]; 
+  isHighlighted?: boolean;
+  score?: number;
+  description?: string;
+  clusterId?: number;
+  clusterColor?: string;
+  tags?: string[];
+  x?: number;
+  y?: number;
+  z?: number;
+}
+
+interface CustomLink extends LinkObject {
+  source: string | CustomNode;
+  target: string | CustomNode;
+  value: number;
+}
+
+interface GraphData {
+  nodes: CustomNode[];
+  links: CustomLink[];
+  clusters?: ClusterInfo[];
+}
+
+interface ClusterInfo {
+  id: number;
+  label: string;
+  color: string;
+}
+
+// === Optimization: Shared Assets & Texture Cache ===
+const textureCache = new Map<string, THREE.Texture>();
+
+export const NetworkGraph3D: React.FC<NetworkGraph3DProps> = ({ onNodeClick, className }) => {
+  const { showAlert } = useDialog();
+  const fgRef = useRef<ForceGraphMethods>(null!);
+  const [data, setData] = useState<GraphData>({ nodes: [], links: [] });
+  const [hoveredNodeId, setHoveredNodeId] = useState<string | null>(null);
+  const [selectedClusterId, setSelectedClusterId] = useState<number | null>(null);
+  
+  const spriteCache = useRef<Map<string, THREE.Sprite>>(new Map());
+  const clusterMapRef = useRef<Map<string, number>>(new Map());
+  // Store direct references to cluster visual objects for fast updates
+  const clusterVisualsRef = useRef<Map<number, { label: THREE.Sprite, nebula: THREE.Mesh }>>(new Map());
+  const updateRef = useRef<(() => void) | null>(null);
+  const [searchQuery, setSearchQuery] = useState('');
+  const [searchResults, setSearchResults] = useState<CustomNode[]>([]);
+  const [currentSearchIndex, setCurrentSearchIndex] = useState(0);
+  
+  // Controls
+  const [isLoading, setIsLoading] = useState(false);
+  const [isSearching, setIsSearching] = useState(false);
+  const [showControls, setShowControls] = useState(false);
+  const [showClusters, setShowClusters] = useState(true);
+  const [threshold, setThreshold] = useState(0.75);
+  const [cachedVectors, setCachedVectors] = useState<any[]>([]);
+  const labelsGroupRef = useRef<THREE.Group>(new THREE.Group());
+  const nebulasGroupRef = useRef<THREE.Group>(new THREE.Group());
+  
+  // Cache for icon textures to improve performance
+  const containerRef = useRef<HTMLDivElement>(null);
+  const [dimensions, setDimensions] = useState({ width: 800, height: 600 });
+
+  // Main Graph Builder
+  const buildGraph = useCallback(async (forceFetch = false) => {
+      if (!forceFetch && cachedVectors.length > 0 && !isLoading) {
+          processVectors(cachedVectors);
+          return;
+      }
+
+      setIsLoading(true);
+      try {
+        const vectors = await getAllVectors();
+        if (vectors) {
+            setCachedVectors(vectors);
+            processVectors(vectors);
+        }
+      } catch (e) {
+          console.error("3D Graph build failed", e);
+      } finally {
+          setIsLoading(false);
+      }
+  }, [cachedVectors, threshold]);
+
+  // Initialize Resize Observer & Message Listener
+  useEffect(() => {
+    if (containerRef.current) {
+      const resizeObserver = new ResizeObserver((entries) => {
+        for (let entry of entries) {
+          setDimensions({
+            width: entry.contentRect.width,
+            height: entry.contentRect.height
+          });
+        }
+      });
+      resizeObserver.observe(containerRef.current);
+
+      // Listen for real-time updates
+      const messageListener = (message: any) => {
+        if (message.type === 'VECTOR_UPDATED') {
+          console.log('Real-time update: refreshing 3D graph...');
+          buildGraph(true);
+        }
+      };
+      chrome.runtime?.onMessage.addListener(messageListener);
+
+      const handleMouseMove = (e: MouseEvent) => {
+          const graph = fgRef.current;
+          if (!graph || !containerRef.current) return;
+          const scene = graph.scene();
+          const camera = graph.camera();
+          const renderer = graph.renderer();
+          if (!scene || !camera || !renderer) return;
+
+          const rect = renderer.domElement.getBoundingClientRect();
+          const mouse = new THREE.Vector2(
+              ((e.clientX - rect.left) / rect.width) * 2 - 1,
+              -((e.clientY - rect.top) / rect.height) * 2 + 1
+          );
+
+          const raycaster = new THREE.Raycaster();
+          raycaster.setFromCamera(mouse, camera);
+
+          const labelsGroup = scene.getObjectByName('cluster-labels');
+          if (labelsGroup) {
+              const intersects = raycaster.intersectObjects(labelsGroup.children);
+              containerRef.current.style.cursor = intersects.length > 0 ? 'pointer' : 'default';
+          }
+      };
+      containerRef.current.addEventListener('mousemove', handleMouseMove);
+
+      return () => {
+        resizeObserver.disconnect();
+        chrome.runtime?.onMessage.removeListener(messageListener);
+        containerRef.current?.removeEventListener('mousemove', handleMouseMove);
+      };
+    }
+  }, [buildGraph]);
+
+  // === Galaxy & Starfield Background ===
+  useEffect(() => {
+    const graph = fgRef.current;
+    if (!graph) return;
+
+    // Access the Three.js scene
+    const scene = graph.scene();
+    
+    // 1. Distant Starfield (Background)
+    const starGeo = new THREE.BufferGeometry();
+    const starCount = 2000;
+    const starPos = new Float32Array(starCount * 3);
+    const starColors = new Float32Array(starCount * 3);
+    
+    for(let i=0; i<starCount; i++) {
+        const r = 3000 + Math.random() * 3000; // Far away
+        const theta = 2 * Math.PI * Math.random();
+        const phi = Math.acos(2 * Math.random() - 1);
+        
+        starPos[i*3] = r * Math.sin(phi) * Math.cos(theta);
+        starPos[i*3+1] = r * Math.sin(phi) * Math.sin(theta);
+        starPos[i*3+2] = r * Math.cos(phi);
+
+        // Slight color variation (Blue/White/Yellow)
+        const colorType = Math.random();
+        let c = new THREE.Color();
+        if (colorType > 0.9) c.setHex(0xaaaaff); // Blueish
+        else if (colorType > 0.7) c.setHex(0xffddaa); // Yellowish
+        else c.setHex(0xffffff); // White
+        
+        starColors[i*3] = c.r;
+        starColors[i*3+1] = c.g;
+        starColors[i*3+2] = c.b;
+    }
+    starGeo.setAttribute('position', new THREE.BufferAttribute(starPos, 3));
+    starGeo.setAttribute('color', new THREE.BufferAttribute(starColors, 3));
+    
+    const starMat = new THREE.PointsMaterial({
+        size: 10, // Large because they are far
+        vertexColors: true,
+        transparent: true,
+        opacity: 0.8,
+        fog: false
+    });
+    const starField = new THREE.Points(starGeo, starMat);
+    starField.name = 'background-stars';
+    scene.add(starField);
+
+    // 2. Spiral Galaxy (Mid-distance decorative)
+    const galaxyGeo = new THREE.BufferGeometry();
+    const galaxyCount = 3000;
+    const galaxyPos = new Float32Array(galaxyCount * 3);
+    const galaxyColors = new Float32Array(galaxyCount * 3);
+    
+    // Spiral params
+    const arms = 3;
+    const armWidth = 0.4;
+    
+    for(let i=0; i<galaxyCount; i++) {
+        // Random distance from center
+        const r = Math.pow(Math.random(), 2) * 1500 + 100; // Concentrated at center
+        // Spiral angle
+        const spiralAngle = (r / 2000) * 5 + (Math.PI * 2 * (i % arms)) / arms;
+        // Random spread
+        const spread = (Math.random() - 0.5) * armWidth * (2 * Math.PI / arms) * r * 0.5;
+        const angle = spiralAngle + spread;
+        
+        const x = r * Math.cos(angle);
+        const y = (Math.random() - 0.5) * (r * 0.2); // Flat disk
+        const z = r * Math.sin(angle);
+        
+        galaxyPos[i*3] = x;
+        galaxyPos[i*3+1] = y - 500; // Shift down below the main graph
+        galaxyPos[i*3+2] = z;
+
+        // Color gradient (Center: Yellow/White -> Outer: Blue/Purple)
+        const color = new THREE.Color();
+        const distRatio = r / 1600;
+        if (distRatio < 0.2) color.setHex(0xffaa88); // Orange center
+        else if (distRatio < 0.5) color.setHex(0xffffff); // White mid
+        else color.setHex(0x88aaff); // Blue outer
+        
+        // Random variation
+        color.offsetHSL(0, 0, (Math.random()-0.5)*0.2);
+
+        galaxyColors[i*3] = color.r;
+        galaxyColors[i*3+1] = color.g;
+        galaxyColors[i*3+2] = color.b;
+    }
+
+    galaxyGeo.setAttribute('position', new THREE.BufferAttribute(galaxyPos, 3));
+    galaxyGeo.setAttribute('color', new THREE.BufferAttribute(galaxyColors, 3));
+
+    const galaxyMat = new THREE.PointsMaterial({
+        size: 2,
+        vertexColors: true,
+        transparent: true,
+        opacity: 0.4,
+        blending: THREE.AdditiveBlending,
+        depthWrite: false
+    });
+    const galaxy = new THREE.Points(galaxyGeo, galaxyMat);
+    galaxy.name = 'background-galaxy';
+    scene.add(galaxy);
+
+    // 3. Bright Stars (恒星 - Large glowing stars)
+    const brightStarCount = 50;
+    const brightStarsGroup = new THREE.Group();
+    brightStarsGroup.name = 'background-bright-stars';
+    
+    // Helper to create glowing star texture
+    const createStarTexture = (color: string) => {
+        const canvas = document.createElement('canvas');
+        canvas.width = 64; canvas.height = 64;
+        const ctx = canvas.getContext('2d')!;
+        const grad = ctx.createRadialGradient(32, 32, 0, 32, 32, 32);
+        grad.addColorStop(0, 'white');
+        grad.addColorStop(0.2, color);
+        grad.addColorStop(0.5, color); // Fade out
+        grad.addColorStop(1, 'transparent');
+        ctx.fillStyle = grad;
+        ctx.fillRect(0, 0, 64, 64);
+        return new THREE.CanvasTexture(canvas);
+    };
+
+    const brightStarColors = ['#ffddaa', '#aaddff', '#ffaaaa', '#ffffff']; // Yellow, Blue, Red, White
+    const brightStarTextures: THREE.Texture[] = brightStarColors.map(c => createStarTexture(c));
+
+    for (let i = 0; i < brightStarCount; i++) {
+        const material = new THREE.SpriteMaterial({
+            map: brightStarTextures[Math.floor(Math.random() * brightStarTextures.length)],
+            color: 0xffffff,
+            transparent: true,
+            opacity: 0.3, // Reduced opacity to not distract from links
+            blending: THREE.AdditiveBlending
+        });
+        const sprite = new THREE.Sprite(material);
+        
+        // Random position far out (between 4000 and 8000) - pushed further back
+        const r = 4000 + Math.random() * 4000;
+        const theta = Math.random() * Math.PI * 2;
+        const phi = Math.acos(2 * Math.random() - 1);
+        
+        sprite.position.x = r * Math.sin(phi) * Math.cos(theta);
+        sprite.position.y = r * Math.sin(phi) * Math.sin(theta);
+        sprite.position.z = r * Math.cos(phi);
+        
+        // Random size (smaller)
+        const s = 20 + Math.random() * 40;
+        sprite.scale.set(s, s, 1);
+        
+        brightStarsGroup.add(sprite);
+    }
+    scene.add(brightStarsGroup);
+
+    // 4. Cluster Labels Group
+    const labelsGroup = labelsGroupRef.current;
+    labelsGroup.name = 'cluster-labels';
+    scene.add(labelsGroup);
+
+    // 5. Cluster Nebulas Group (Spheres for area)
+    const nebulasGroup = nebulasGroupRef.current;
+    nebulasGroup.name = 'cluster-nebulas';
+    scene.add(nebulasGroup);
+
+  // === Populate Cluster Map for Fast Lookup ===
+  useEffect(() => {
+      clusterMapRef.current.clear();
+      data.nodes.forEach(node => {
+          if (node.clusterId !== undefined) {
+              clusterMapRef.current.set(String(node.id), node.clusterId);
+          }
+      });
+  }, [data.nodes]);
+
+  // === Background Animation Loop ===
+  useEffect(() => {
+    const graph = fgRef.current;
+    if (!graph) return;
+    const scene = graph.scene();
+    if (!scene) return;
+    
+    let frameId: number;
+    const animate = () => {
+        const starField = scene.getObjectByName('background-stars');
+        const galaxy = scene.getObjectByName('background-galaxy');
+        const brightStarsGroup = scene.getObjectByName('background-bright-stars');
+
+        if (starField) starField.rotation.y += 0.0001;
+        if (galaxy) galaxy.rotation.y += 0.0003;
+        if (brightStarsGroup) brightStarsGroup.rotation.y += 0.00015;
+        
+        frameId = requestAnimationFrame(animate);
+    };
+    animate();
+
+    return () => {
+        cancelAnimationFrame(frameId);
+    };
+  }, []); 
+
+  // === Cluster Visuals Setup (Creation Only) ===
+  useEffect(() => {
+      const graph = fgRef.current;
+      if (!graph) return;
+      const scene = graph.scene();
+      if (!scene) return;
+
+      const labelsGroup = labelsGroupRef.current;
+      const nebulasGroup = nebulasGroupRef.current;
+
+      if (!showClusters || !data.clusters || data.clusters.length === 0) {
+          clusterVisualsRef.current.clear();
+          labelsGroup.clear();
+          nebulasGroup.clear();
+          return;
+      }
+
+      // Cleanup previous
+      clusterVisualsRef.current.clear();
+      labelsGroup.clear();
+      nebulasGroup.clear();
+
+      data.clusters.forEach(cluster => {
+          // 1. Nebula
+          const nebGeo = new THREE.SphereGeometry(1, 32, 32); 
+          const nebMat = new THREE.MeshBasicMaterial({
+              color: cluster.color,
+              transparent: true,
+              opacity: 0.2, 
+              depthWrite: false,
+              blending: THREE.AdditiveBlending
+          });
+          const nebula = new THREE.Mesh(nebGeo, nebMat);
+          nebula.name = `nebula-${cluster.id}`;
+          nebulasGroup.add(nebula);
+
+          // 2. Label
+          const canvas = document.createElement('canvas');
+          canvas.width = 256; canvas.height = 64;
+          const ctx = canvas.getContext('2d')!;
+          ctx.font = 'bold 48px Sans-Serif';
+          ctx.fillStyle = `${cluster.color}FF`;
+          ctx.textAlign = 'center';
+          ctx.textBaseline = 'middle';
+          ctx.fillText(cluster.label, 128, 32);
+
+          const tex = new THREE.CanvasTexture(canvas);
+          const mat = new THREE.SpriteMaterial({ 
+              map: tex, 
+              transparent: true, 
+              depthWrite: false, 
+              opacity: 0.9
+          });
+          const sprite = new THREE.Sprite(mat);
+          sprite.name = `label-${cluster.id}`;
+          labelsGroup.add(sprite);
+
+          // Store ref
+          clusterVisualsRef.current.set(cluster.id, { label: sprite, nebula });
+      });
+
+  }, [data.clusters, showClusters]);
+
+  // === Cluster Position Update (Tick Driven) ===
+  const updateClusterPositions = useCallback(() => {
+    if (clusterVisualsRef.current.size === 0) return;
+    
+    const graph = fgRef.current as any;
+    if (!graph) return;
+    
+    const gd = graph.graphData();
+    if (!gd || !gd.nodes) return;
+    const liveNodes = gd.nodes;
+
+    const nodesByCluster = new Map<number, {x: number, y: number, z: number}[]>();
+    
+    for (let i = 0; i < liveNodes.length; i++) {
+        const n = liveNodes[i];
+        if (!n) continue;
+        
+        const id = (typeof n.id === 'object' && n.id !== null) ? n.id.id : n.id;
+        let cid = n.clusterId;
+        
+        if (cid === undefined && clusterMapRef.current.has(id)) {
+            cid = clusterMapRef.current.get(id);
+        }
+
+        if (cid !== undefined) {
+             const nx = typeof n.x === 'number' ? n.x : 0;
+             const ny = typeof n.y === 'number' ? n.y : 0;
+             const nz = typeof n.z === 'number' ? n.z : 0;
+             // Only count if positioned
+             if (nx !== 0 || ny !== 0 || nz !== 0) {
+                if (!nodesByCluster.has(cid)) nodesByCluster.set(cid, []);
+                nodesByCluster.get(cid)!.push({ x: nx, y: ny, z: nz });
+             }
+        }
+    }
+
+    clusterVisualsRef.current.forEach((visuals, clusterId) => {
+        const nodes = nodesByCluster.get(clusterId);
+        if (!nodes || nodes.length === 0) return;
+
+        let sx = 0, sy = 0, sz = 0;
+        for(let j=0; j<nodes.length; j++) {
+            sx += nodes[j].x;
+            sy += nodes[j].y;
+            sz += nodes[j].z;
+        }
+
+        const count = nodes.length;
+        const cx = sx / count;
+        const cy = sy / count;
+        const cz = sz / count;
+
+        let maxDist = 0;
+        for(let j=0; j<nodes.length; j++) {
+            const dx = nodes[j].x - cx;
+            const dy = nodes[j].y - cy;
+            const dz = nodes[j].z - cz;
+            const d2 = dx*dx + dy*dy + dz*dz;
+            if (d2 > maxDist) maxDist = d2;
+        }
+        const radius = Math.sqrt(maxDist) + 30; 
+
+        visuals.label.position.set(cx, cy + radius + 10, cz);
+        visuals.nebula.position.set(cx, cy, cz);
+        visuals.nebula.scale.set(radius, radius, radius);
+    });
+  }, []);
+
+
+  const processVectors = (vectors: any[]) => {
+        if (!vectors || vectors.length === 0) {
+            setData({ nodes: [], links: [] });
+            return;
+        }
+
+        // Clear cache when new data is processed
+        spriteCache.current.clear();
+
+        const nodes: CustomNode[] = vectors.map((v: any) => ({
+            id: v.url,
+            title: v.title || v.url,
+            url: v.url,
+            val: 2,
+            vector: v.vector,
+            description: v.description,
+            tags: v.tags,
+            color: v.isSaved ? '#10b981' : '#8b5cf6' // Emerald for saved, Purple for others
+        }));
+
+        // === Clustering ===
+        let clusters: ClusterInfo[] = [];
+        if (nodes.length > 5 && showClusters) {
+            const k = Math.max(2, Math.floor(Math.sqrt(nodes.length / 2)));
+            const dataToCluster = nodes.map(n => n.vector || []);
+            try {
+                const result = kmeans(dataToCluster, k, {});
+                const clustersMap = new Map<number, { nodes: CustomNode[], tags: Map<string, number> }>();
+                
+                nodes.forEach((node, i) => {
+                    const clusterId = result.clusters[i];
+                    node.clusterId = clusterId;
+                    
+                    if (!clustersMap.has(clusterId)) {
+                        clustersMap.set(clusterId, { nodes: [], tags: new Map() });
+                    }
+                    const cData = clustersMap.get(clusterId)!;
+                    cData.nodes.push(node);
+                    
+                    if (node.tags) {
+                        node.tags.forEach(tag => {
+                            cData.tags.set(tag, (cData.tags.get(tag) || 0) + 1);
+                        });
+                    }
+                });
+
+                const clusterColors = [
+                    '#8b5cf6', '#ec4899', '#3b82f6', '#10b981', '#f59e0b', 
+                    '#ef4444', '#06b6d4', '#84cc16', '#a855f7', '#64748b'
+                ];
+
+                clusters = Array.from(clustersMap.entries()).map(([id, data]) => {
+                    const sortedTags = Array.from(data.tags.entries()).sort((a, b) => b[1] - a[1]);
+                    const label = sortedTags.length > 0 ? sortedTags[0][0] : data.nodes[0].title.substring(0, 10);
+                    const color = clusterColors[id % clusterColors.length];
+                    
+                    data.nodes.forEach(n => {
+                        n.clusterColor = color;
+                        clusterMapRef.current.set(n.id, id);
+                    });
+                    
+                    return { id, label, color };
+                });
+            } catch (e) {
+                console.error("3D Clustering failed", e);
+            }
+        }
+
+        const links: CustomLink[] = [];
+        
+        for (let i = 0; i < vectors.length; i++) {
+            for (let j = i + 1; j < vectors.length; j++) {
+                const sim = similarity.cosine(vectors[i].vector, vectors[j].vector);
+                if (sim > threshold) {
+                    links.push({
+                        source: vectors[i].url,
+                        target: vectors[j].url,
+                        value: sim 
+                    });
+                }
+            }
+        }
+        
+        const degrees: Record<string, number> = {};
+        links.forEach(l => {
+            const s = typeof l.source === 'string' ? l.source : (l.source as CustomNode).id;
+            const t = typeof l.target === 'string' ? l.target : (l.target as CustomNode).id;
+            if(s) degrees[s] = (degrees[s] || 0) + 1;
+            if(t) degrees[t] = (degrees[t] || 0) + 1;
+        });
+
+        nodes.forEach(n => {
+            const deg = degrees[n.id] || 0;
+            n.val = Math.max(2, Math.min(15, Math.sqrt(deg) * 3)); 
+        });
+
+        setData({ nodes, links, clusters });
+  };
+
+  useEffect(() => {
+      if (cachedVectors.length === 0) {
+          buildGraph(true);
+      } else {
+          processVectors(cachedVectors);
+      }
+  }, [threshold, showClusters]);
+
+  const navigateToNode = (node: CustomNode) => {
+      if (fgRef.current && node.x !== undefined && node.y !== undefined && node.z !== undefined) {
+             const distance = 400;
+             const distRatio = 1 + distance/Math.hypot(node.x, node.y, node.z);
+             fgRef.current.cameraPosition(
+                 { x: node.x * distRatio, y: node.y * distRatio, z: node.z * distRatio },
+                 { x: node.x, y: node.y, z: node.z }, // LookAt target
+                 2000
+             );
+      }
+  };
+
+  const handlePrevResult = () => {
+      if (searchResults.length === 0) return;
+      const newIndex = (currentSearchIndex - 1 + searchResults.length) % searchResults.length;
+      setCurrentSearchIndex(newIndex);
+      navigateToNode(searchResults[newIndex]);
+  };
+
+  const handleNextResult = () => {
+      if (searchResults.length === 0) return;
+      const newIndex = (currentSearchIndex + 1) % searchResults.length;
+      setCurrentSearchIndex(newIndex);
+      navigateToNode(searchResults[newIndex]);
+  };
+
+  const handleGraphSearch = async () => {
+      if (!searchQuery.trim() || data.nodes.length === 0) return;
+      setIsSearching(true);
+      setSearchResults([]);
+      setCurrentSearchIndex(0);
+
+      try {
+          const settings = await chrome.storage.local.get(['geminiApiKey', 'embeddingModel']);
+          const apiKey = settings.geminiApiKey as string;
+          const modelName = (settings.embeddingModel || 'models/embedding-001') as string;
+          
+          if(!apiKey) {
+              await showAlert('先に設定でAPIキーを設定してください');
+              return;
+          }
+
+          const queryVector = await getEmbedding(searchQuery, apiKey, modelName);
+          
+          const scoredNodes = data.nodes.map((n: CustomNode) => ({
+              node: n,
+              score: n.vector ? similarity.cosine(queryVector, n.vector) : 0
+          }));
+          
+          scoredNodes.sort((a: any, b: any) => b.score - a.score);
+          const topNodes = scoredNodes.filter((n: any) => n.score > 0.4).slice(0, 10).map((n: any) => n.node);
+          
+          data.nodes.forEach((n: CustomNode) => {
+              n.isHighlighted = false;
+              n.score = 0; // Reset scores
+          });
+
+          // Store scores for all nodes to modulate glow
+          scoredNodes.forEach((item: any) => {
+              item.node.score = item.score;
+          });
+          
+          if (topNodes.length > 0) {
+              setSearchResults(topNodes);
+              topNodes.forEach((node: CustomNode) => {
+                  node.isHighlighted = true;
+              });
+
+              navigateToNode(topNodes[0]);
+          } else {
+              await showAlert('関連する星は見つかりませんでした。');
+          }
+      } catch (e) {
+          console.error(e);
+          await showAlert('検索エラー');
+      } finally {
+          setIsSearching(false);
+      }
+  };
+
+  const handleResetCamera = () => {
+      if (fgRef.current) {
+          fgRef.current.cameraPosition({ x: 0, y: 0, z: 1000 }, { x: 0, y: 0, z: 0 }, 1000);
+      }
+  };
+
+  return (
+    <div 
+        ref={containerRef} 
+        className={`relative w-full h-full bg-black overflow-hidden rounded-xl border border-slate-800 ${className}`}
+    >
+        {/* Loading Overlay */}
+        {isLoading && (
+            <div className="absolute inset-0 flex items-center justify-center bg-black/80 z-20">
+                <div className="flex flex-col items-center gap-2 text-purple-300">
+                    <Loader2 className="animate-spin" size={32} />
+                    <span className="text-xs tracking-widest uppercase">3D銀河を生成中...</span>
+                </div>
+            </div>
+        )}
+
+        {/* Search Bar (Top Left) */}
+        <div className="absolute top-4 left-4 z-10 flex gap-2">
+            <div className="relative">
+                <input 
+                    type="text" 
+                    value={searchQuery}
+                    onChange={e => setSearchQuery(e.target.value)}
+                    onKeyDown={e => e.key === 'Enter' && handleGraphSearch()}
+                    placeholder="星を検索..."
+                    className="bg-slate-900/80 backdrop-blur text-xs text-white border border-slate-700 rounded-full px-4 py-2 w-48 focus:w-72 transition-all outline-none focus:border-purple-500 shadow-xl"
+                />
+                {searchQuery && (
+                    <button 
+                        onClick={() => { 
+                            setSearchQuery(''); 
+                            setSearchResults([]);
+                            data.nodes.forEach((n: CustomNode) => n.isHighlighted = false); 
+                        }}
+                        className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-500 hover:text-white"
+                    >
+                        <X size={14} />
+                    </button>
+                )}
+            </div>
+            <button 
+                onClick={handleGraphSearch}
+                disabled={isSearching}
+                className="p-2 bg-purple-600/80 hover:bg-purple-500 text-white rounded-full backdrop-blur shadow-lg transition-all"
+            >
+                {isSearching ? <Loader2 size={16} className="animate-spin" /> : <Search size={16} />}
+            </button>
+            
+            {/* Search Navigation */}
+            {searchResults.length > 0 && (
+                <div className="flex items-center gap-1 bg-slate-900/80 backdrop-blur border border-slate-700 rounded-full px-3 py-1 ml-2 animate-in fade-in slide-in-from-left-4 shadow-lg">
+                    <button 
+                        onClick={handlePrevResult}
+                        className="p-1 text-slate-400 hover:text-white hover:bg-slate-700/50 rounded-full transition-colors"
+                    >
+                        <ChevronLeft size={16} />
+                    </button>
+                    <span className="text-[10px] font-mono text-purple-300 min-w-[30px] text-center">
+                        {currentSearchIndex + 1} / {searchResults.length}
+                    </span>
+                    <button 
+                        onClick={handleNextResult}
+                        className="p-1 text-slate-400 hover:text-white hover:bg-slate-700/50 rounded-full transition-colors"
+                    >
+                        <ChevronRight size={16} />
+                    </button>
+                </div>
+            )}
+        </div>
+
+        {/* View Controls & Stats (Moved to Bottom Right to avoid overlap) */}
+        <div className="absolute bottom-16 right-4 z-10 flex flex-col gap-2 items-end">
+            <div className="bg-slate-900/80 backdrop-blur border border-slate-700 rounded-lg p-1 flex flex-col gap-1 shadow-xl">
+                <button 
+                    onClick={handleResetCamera}
+                    className="p-1.5 text-slate-400 hover:text-white hover:bg-slate-800 rounded transition-colors"
+                    title="カメラリセット"
+                >
+                    <RotateCw size={16} />
+                </button>
+            </div>
+            <div className="bg-slate-900/80 backdrop-blur px-3 py-1.5 rounded-lg border border-purple-500/30 text-[10px] text-purple-200 shadow-lg text-center">
+                Nodes: {data.nodes.length}
+            </div>
+        </div>
+
+        {/* Control Panel Toggle (Bottom Left) */}
+        <div className="absolute bottom-4 left-4 z-10">
+            <button
+                onClick={() => setShowControls(!showControls)}
+                className={`p-2.5 rounded-xl backdrop-blur border shadow-lg transition-all ${
+                    showControls ? 'bg-purple-600 text-white border-purple-400' : 'bg-slate-900/80 text-slate-400 border-slate-700 hover:text-white'
+                }`}
+                title="グラフ制御"
+            >
+                {showControls ? <Minimize2 size={20} /> : <Settings2 size={20} />}
+            </button>
+        </div>
+
+        {/* Control Panel (Expanded) */}
+        {showControls && (
+            <div className="absolute bottom-16 left-4 z-10 bg-slate-900/90 backdrop-blur border border-slate-700 rounded-2xl p-5 w-72 shadow-2xl space-y-5 animate-in slide-in-from-bottom-2 fade-in">
+                <div className="space-y-3">
+                    <div className="flex justify-between items-center text-xs text-slate-300">
+                        <span className="font-medium">類似度閾値 (3D)</span>
+                        <span className="font-mono text-purple-400 font-bold bg-purple-500/10 px-2 py-0.5 rounded">{threshold.toFixed(2)}</span>
+                    </div>
+                    <input 
+                        type="range" 
+                        min="0.6" 
+                        max="0.99" 
+                        step="0.01" 
+                        value={threshold} 
+                        onChange={(e) => setThreshold(parseFloat(e.target.value))}
+                        className="w-full h-1.5 bg-slate-700 rounded-lg appearance-none cursor-pointer accent-purple-500"
+                    />
+                    <p className="text-[10px] text-slate-500 leading-tight">
+                        閾値を下げると星同士の繋がり（星座）が増えます。
+                    </p>
+                </div>
+
+                <div className="flex items-center justify-between pt-2 border-t border-slate-800">
+                    <span className="text-xs text-slate-300">クラスターを表示</span>
+                    <button 
+                        onClick={() => setShowClusters(!showClusters)}
+                        className={`w-10 h-5 rounded-full transition-colors relative ${showClusters ? 'bg-purple-600' : 'bg-slate-700'}`}
+                    >
+                        <div className={`absolute top-1 w-3 h-3 bg-white rounded-full transition-all ${showClusters ? 'left-6' : 'left-1'}`} />
+                    </button>
+                </div>
+            </div>
+        )}
+
+        {data.nodes.length > 0 && (
+            <ForceGraph3D
+                ref={fgRef}
+                width={dimensions.width}
+                height={dimensions.height}
+                graphData={data}
+                backgroundColor="#000000"
+                
+                // === Aesthetics ===
+                nodeRelSize={1}
+                nodeVal={(node: any) => (node as CustomNode).val || 2}
+                nodeColor={(node: any) => {
+                    const n = node as CustomNode;
+                    if (selectedClusterId !== null && n.clusterId !== selectedClusterId) {
+                        return 'rgba(51, 65, 85, 0.05)'; // Very faint
+                    }
+                    if (n.isHighlighted) return '#fbbf24';
+                    return n.clusterColor || n.color || '#8b5cf6';
+                }}
+                nodeOpacity={0.9}
+                
+                // === Unified Star/Icon Sprite (Enhanced Visuals) ===
+                nodeThreeObject={(node: any) => {
+                  const n = node as CustomNode;
+                  // Re-sync clusterId for tracking
+                  if (n.clusterId === undefined) {
+                      const id = (typeof n.id === 'object' && n.id !== null) ? (n.id as any).id : n.id;
+                      n.clusterId = clusterMapRef.current.get(id as string);
+                  }
+
+                  const size = 6 + (n.val || 2) * 1.5;
+                  const score = n.score || 0;
+                  const isCurrent = searchResults.length > 0 && searchResults[currentSearchIndex]?.id === n.id;
+                  const isHigh = n.isHighlighted || isCurrent;
+                  const isHovered = n.id === hoveredNodeId;
+
+                  // 1. Check Cache
+                  if (spriteCache.current.has(n.id as string)) {
+                      const cachedSprite = spriteCache.current.get(n.id as string)!;
+                      const mat = cachedSprite.material as THREE.SpriteMaterial;
+                      const targetOpacity = (selectedClusterId === null || n.clusterId === selectedClusterId) ? 1.0 : 0.1;
+                      if (mat.opacity !== targetOpacity) {
+                          mat.opacity = targetOpacity;
+                          mat.needsUpdate = true;
+                      }
+                      
+                      // Update scale based on score/hover/selection
+                      let currentScale = 4 + score * 6;
+                      if (isHigh) currentScale = 10;
+                      if (isCurrent) currentScale = 14;
+                      if (isHovered) currentScale *= 1.3;
+                      cachedSprite.scale.set(size * currentScale, size * currentScale, 1);
+                      
+                      return cachedSprite;
+                  }
+
+                  const canvas = document.createElement('canvas');
+                  canvas.width = 128; canvas.height = 128;
+                  const ctx = canvas.getContext('2d')!;
+
+                  let iconTex: THREE.Texture;
+                  const nodeColor = n.clusterColor || '#3b82f6';
+                  const cacheKey = `${n.id}_${nodeColor}_${isCurrent}_${isHigh}`;
+
+                  if (textureCache.has(cacheKey)) {
+                    iconTex = textureCache.get(cacheKey)!;
+                  } else {
+                    const drawMainGlow = () => {
+                        const spikeSize = (isCurrent || isHigh || isHovered) ? 60 : (40 + score * 15);
+                        const drawSpike = (angle: number, width: number, length: number) => {
+                            ctx.save();
+                            ctx.translate(64, 64);
+                            ctx.rotate(angle);
+                            const grad = ctx.createLinearGradient(0, 0, length, 0);
+                            grad.addColorStop(0, nodeColor);
+                            grad.addColorStop(1, 'rgba(0,0,0,0)');
+                            ctx.fillStyle = grad;
+                            ctx.beginPath();
+                            ctx.moveTo(0, -width);
+                            ctx.lineTo(length, 0);
+                            ctx.lineTo(0, width);
+                            ctx.fill();
+                            ctx.restore();
+                        };
+                        
+                        // Outer Glow
+                        ctx.shadowBlur = (isCurrent || isHigh || isHovered) ? 30 : 15;
+                        ctx.shadowColor = nodeColor;
+                        
+                        if (isCurrent || isHigh || isHovered || score > 0.5) {
+                            // Primary Cross
+                            drawSpike(0, 2, spikeSize);
+                            drawSpike(Math.PI / 2, 2, spikeSize);
+                            drawSpike(Math.PI, 2, spikeSize);
+                            drawSpike(-Math.PI / 2, 2, spikeSize);
+                            
+                            // Secondary Cross (Star shape)
+                            drawSpike(Math.PI / 4, 1.2, spikeSize * 0.8);
+                            drawSpike(-Math.PI / 4, 1.2, spikeSize * 0.8);
+                        } else {
+                            // Main Cross
+                            drawSpike(0, 3, spikeSize);
+                            drawSpike(Math.PI / 2, 3, spikeSize);
+                            
+                            // Diagonal Spikes (Subtle)
+                            if (isCurrent || isHigh || isHovered || score > 0.8) {
+                                drawSpike(Math.PI / 4, 1.5, spikeSize * 0.7);
+                                drawSpike(-Math.PI / 4, 1.5, spikeSize * 0.7);
+                            }
+                        }
+                        ctx.globalAlpha = 1.0;
+                    };
+
+                    const renderPlaceholder = () => {
+                        ctx.clearRect(0, 0, 128, 128);
+                        drawMainGlow();
+                        // White Disc
+                        const discSize = (isCurrent || isHigh || isHovered) ? 45 : (32 + score * 10);
+                        ctx.fillStyle = 'white';
+                        ctx.beginPath(); ctx.arc(64, 64, discSize, 0, Math.PI*2); ctx.fill();
+                        // Category Color Center
+                        ctx.fillStyle = nodeColor;
+                        ctx.beginPath(); ctx.arc(64, 64, discSize - 4, 0, Math.PI*2); ctx.fill();
+                    };
+
+                    renderPlaceholder();
+                    iconTex = new THREE.CanvasTexture(canvas);
+                    textureCache.set(cacheKey, iconTex);
+
+                    chrome.runtime.sendMessage({ 
+                        type: 'GET_FAVICON_DATA_URL', 
+                        url: n.url 
+                    }, (dataUrl) => {
+                        if (dataUrl) {
+                            const img = new Image();
+                            img.src = dataUrl;
+                            img.onload = () => {
+                                ctx.clearRect(0, 0, 128, 128);
+                                drawMainGlow();
+                                
+                                // Glowing White BG
+                                const bgSize = (isCurrent || isHigh || isHovered) ? 50 : (36 + score * 12);
+                                ctx.shadowBlur = (isCurrent || isHigh || isHovered) ? 20 : (5 + score * 10);
+                                ctx.shadowColor = nodeColor;
+                                ctx.fillStyle = 'white';
+                                ctx.beginPath(); ctx.arc(64, 64, bgSize, 0, Math.PI*2); ctx.fill();
+                                ctx.shadowBlur = 0;
+
+                                // Clip and draw icon
+                                ctx.save();
+                                const iconSize = bgSize - 4;
+                                ctx.beginPath(); ctx.arc(64, 64, iconSize, 0, Math.PI*2); ctx.clip();
+                                ctx.drawImage(img, 64 - iconSize, 64 - iconSize, iconSize * 2, iconSize * 2);
+                                ctx.restore();
+                                
+                                if (iconTex) iconTex.needsUpdate = true;
+                            };
+                        }
+                    });
+                  }
+
+                  const material = new THREE.SpriteMaterial({ 
+                    map: iconTex, 
+                    transparent: true,
+                    depthWrite: false, 
+                    blending: THREE.AdditiveBlending, // Makes it more "glowy"
+                    opacity: (selectedClusterId === null || n.clusterId === selectedClusterId) ? 1.0 : 0.1
+                  });
+                  const sprite = new THREE.Sprite(material);
+                  // Scale up if current, high, or hovered
+                  let baseScale = 4 + score * 6; // Default scale based on score
+                  if (isHigh) baseScale = 10;
+                  if (isCurrent) baseScale = 14;
+                  if (isHovered) baseScale *= 1.3; // Slight magnification on hover
+
+                  sprite.scale.set(size * baseScale, size * baseScale, 1);
+                  spriteCache.current.set(n.id, sprite);
+                  return sprite;
+                }}
+                
+                // === Tooltip (Sci-Fi Monitor Style) ===
+                nodeLabel={(node: any) => {
+                    const n = node as CustomNode;
+                    return `
+                        <div style="
+                            background: rgba(10, 10, 16, 0.85); 
+                            border: 1px solid rgba(0, 255, 255, 0.3);
+                            border-radius: 4px;
+                            padding: 16px; 
+                            max-width: 340px; 
+                            backdrop-filter: blur(4px); 
+                            pointer-events: none;
+                            font-family: 'Courier New', Courier, monospace;
+                            box-shadow: 0 0 20px rgba(0, 255, 255, 0.1), inset 0 0 20px rgba(0, 0, 0, 0.8);
+                            position: relative;
+                            overflow: hidden;
+                        ">
+                            <!-- Scanline Effect -->
+                            <div style="
+                                position: absolute; top: 0; left: 0; right: 0; bottom: 0;
+                                background: linear-gradient(rgba(18, 16, 16, 0) 50%, rgba(0, 0, 0, 0.25) 50%), linear-gradient(90deg, rgba(255, 0, 0, 0.06), rgba(0, 255, 0, 0.02), rgba(0, 0, 255, 0.06));
+                                background-size: 100% 2px, 3px 100%;
+                                pointer-events: none;
+                                z-index: 0;
+                            "></div>
+
+                            <!-- Corner Accents -->
+                            <div style="position: absolute; top: 0; left: 0; width: 10px; height: 10px; border-top: 2px solid cyan; border-left: 2px solid cyan;"></div>
+                            <div style="position: absolute; top: 0; right: 0; width: 10px; height: 10px; border-top: 2px solid cyan; border-right: 2px solid cyan;"></div>
+                            <div style="position: absolute; bottom: 0; left: 0; width: 10px; height: 10px; border-bottom: 2px solid cyan; border-left: 2px solid cyan;"></div>
+                            <div style="position: absolute; bottom: 0; right: 0; width: 10px; height: 10px; border-bottom: 2px solid cyan; border-right: 2px solid cyan;"></div>
+
+                            <div style="position: relative; z-index: 1;">
+                                <div style="
+                                    font-weight: 900; 
+                                    font-size: 14px; 
+                                    color: #00ffff; 
+                                    margin-bottom: 8px; 
+                                    line-height: 1.4; 
+                                    text-transform: uppercase; 
+                                    letter-spacing: 1px;
+                                    text-shadow: 0 0 5px rgba(0, 255, 255, 0.5);
+                                    border-bottom: 1px dashed rgba(0, 255, 255, 0.3);
+                                    padding-bottom: 8px;
+                                ">
+                                    ${n.title || n.url}
+                                </div>
+                                
+                                ${n.description ? `
+                                <div style="
+                                    font-size: 11px; 
+                                    color: #a5f3fc; 
+                                    line-height: 1.5; 
+                                    margin-bottom: 12px; 
+                                    text-align: justify;
+                                ">
+                                    ${n.description}
+                                </div>` : ''}
+                                
+                                <div style="
+                                    display: flex; 
+                                    align-items: center; 
+                                    justify-content: space-between;
+                                    font-size: 9px; 
+                                    color: rgba(0, 255, 255, 0.6); 
+                                    background: rgba(0, 255, 255, 0.05);
+                                    padding: 4px 8px;
+                                    border-radius: 2px;
+                                ">
+                                    <span style="display: flex; align-items: center; gap: 4px;">
+                                        <span style="width: 6px; height: 6px; background: ${n.val > 5 ? '#f59e0b' : '#00ffff'}; border-radius: 50%; box-shadow: 0 0 5px ${n.val > 5 ? '#f59e0b' : '#00ffff'};"></span>
+                                        DATA_SOURCE
+                                    </span>
+                                    <span style="letter-spacing: 0.1em;">${new URL(n.url).hostname.toUpperCase()}</span>
+                                </div>
+                            </div>
+                        </div>
+                    `;
+                }}
+
+                // === Links as Faint Lines ===
+                linkWidth={(link: any) => (link as CustomLink).value * 1.5}
+                linkColor={(link: any) => {
+                    const s = link.source as CustomNode;
+                    const t = link.target as CustomNode;
+                    const isHigh = s.isHighlighted || t.isHighlighted;
+                    
+                    if (selectedClusterId !== null) {
+                        const inCluster = s.clusterId === selectedClusterId && t.clusterId === selectedClusterId;
+                        return inCluster ? (isHigh ? '#f59e0b' : '#64748b') : 'rgba(51, 65, 85, 0.02)';
+                    }
+                    return isHigh ? '#f59e0b' : '#334155';
+                }}
+                linkOpacity={0.3}
+                linkDirectionalParticles={2}
+                linkDirectionalParticleSpeed={0.005}
+                linkDirectionalParticleWidth={1.5}
+                
+                // === Interaction ===
+                onNodeClick={(node: any) => {
+                   const n = node as CustomNode;
+                   // Left click: Open directly
+                   window.open(n.url, '_blank');
+                }}
+                onNodeRightClick={(node: any) => {
+                   const n = node as CustomNode;
+                   // Right click: Preview (side panel)
+                   onNodeClick(n.url);
+                }}
+                onNodeHover={(node: any) => {
+                    setHoveredNodeId(node ? (node as CustomNode).id : null);
+                }}
+                
+                onEngineTick={updateClusterPositions}
+                
+                // === Dimming / Highlighting ===
+                
+                onBackgroundClick={(evt) => {
+                    // Raycast for labels
+                    const graph = fgRef.current;
+                    if (!graph) return;
+                    
+                    const scene = graph.scene();
+                    const camera = graph.camera();
+                    const renderer = graph.renderer();
+                    
+                    if (!scene || !camera || !renderer) return;
+                    
+                    const rect = renderer.domElement.getBoundingClientRect();
+                    const mouse = new THREE.Vector2(
+                        ((evt.clientX - rect.left) / rect.width) * 2 - 1,
+                        -((evt.clientY - rect.top) / rect.height) * 2 + 1
+                    );
+                    
+                    const raycaster = new THREE.Raycaster();
+                    raycaster.setFromCamera(mouse, camera);
+                    
+                    const labelsGroup = scene.getObjectByName('cluster-labels');
+                    if (labelsGroup) {
+                        const intersects = raycaster.intersectObjects(labelsGroup.children);
+                        if (intersects.length > 0) {
+                            const clusterId = intersects[0].object.userData.clusterId;
+                            setSelectedClusterId(prev => prev === clusterId ? null : clusterId);
+                            return;
+                        }
+                    }
+                    
+                    setSelectedClusterId(null);
+                }}
+            />
+        )}
+        
+        {/* Help Tip */}
+        <div className="absolute bottom-4 right-4 pointer-events-none text-right">
+            <p className="text-[10px] text-slate-500">ドラッグ: 回転 | 右ドラッグ: 平行移動 | スクロール: ズーム</p>
+            <p className="text-[10px] text-slate-500 font-bold text-blue-400">クリック: ページを開く | 右クリック: プレビュー</p>
+        </div>
+    </div>
+  );
+};
+};
