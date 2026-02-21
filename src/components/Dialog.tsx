@@ -11,6 +11,7 @@ export interface DialogOptions {
   cancelText?: string;
   defaultValue?: string;
   placeholder?: string;
+  multiLine?: boolean;
 }
 
 interface DialogProps {
@@ -23,11 +24,18 @@ interface DialogProps {
 export const Dialog: React.FC<DialogProps> = ({ isOpen, options, onConfirm, onCancel }) => {
   const [inputValue, setInputValue] = useState(options.defaultValue || '');
   const inputRef = useRef<HTMLInputElement>(null);
+  const textAreaRef = useRef<HTMLTextAreaElement>(null);
 
   useEffect(() => {
     if (isOpen && options.type === 'prompt') {
       setInputValue(options.defaultValue || '');
-      setTimeout(() => inputRef.current?.focus(), 100);
+      setTimeout(() => {
+        if (options.multiLine) {
+          textAreaRef.current?.focus();
+        } else {
+          inputRef.current?.focus();
+        }
+      }, 100);
     }
   }, [isOpen, options]);
 
@@ -42,7 +50,7 @@ export const Dialog: React.FC<DialogProps> = ({ isOpen, options, onConfirm, onCa
   };
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
-    if (e.key === 'Enter') {
+    if (e.key === 'Enter' && (!options.multiLine || e.ctrlKey || e.metaKey)) {
       handleConfirm();
     } else if (e.key === 'Escape') {
       onCancel();
@@ -93,14 +101,25 @@ export const Dialog: React.FC<DialogProps> = ({ isOpen, options, onConfirm, onCa
           </div>
 
           {options.type === 'prompt' && (
-            <input
-              ref={inputRef}
-              type="text"
-              value={inputValue}
-              onChange={(e) => setInputValue(e.target.value)}
-              placeholder={options.placeholder}
-              className="w-full bg-slate-950 border border-slate-700 rounded-lg p-2 text-white focus:ring-2 focus:ring-blue-500 outline-none"
-            />
+            options.multiLine ? (
+              <textarea
+                ref={textAreaRef}
+                value={inputValue}
+                onChange={(e) => setInputValue(e.target.value)}
+                placeholder={options.placeholder}
+                rows={5}
+                className="w-full bg-slate-950 border border-slate-700 rounded-lg p-2 text-white focus:ring-2 focus:ring-blue-500 outline-none resize-none font-sans text-sm"
+              />
+            ) : (
+              <input
+                ref={inputRef}
+                type="text"
+                value={inputValue}
+                onChange={(e) => setInputValue(e.target.value)}
+                placeholder={options.placeholder}
+                className="w-full bg-slate-950 border border-slate-700 rounded-lg p-2 text-white focus:ring-2 focus:ring-blue-500 outline-none"
+              />
+            )
           )}
         </div>
 

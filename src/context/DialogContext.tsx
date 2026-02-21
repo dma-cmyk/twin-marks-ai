@@ -6,7 +6,7 @@ import type { DialogOptions } from '../components/Dialog';
 interface DialogContextType {
   showAlert: (message: ReactNode, title?: string) => Promise<void>;
   showConfirm: (message: ReactNode, title?: string) => Promise<boolean>;
-  showPrompt: (message: ReactNode, defaultValue?: string, title?: string) => Promise<string | null>;
+  showPrompt: (message: ReactNode, defaultValue?: string, title?: string, multiLine?: boolean) => Promise<string | null>;
 }
 
 const DialogContext = createContext<DialogContextType | undefined>(undefined);
@@ -54,8 +54,8 @@ export const DialogProvider: React.FC<{ children: ReactNode }> = ({ children }) 
     return openDialog({ message, title, type: 'confirm' });
   }, [openDialog]);
 
-  const showPrompt = useCallback(async (message: ReactNode, defaultValue?: string, title?: string) => {
-    return openDialog({ message, title, type: 'prompt', defaultValue });
+  const showPrompt = useCallback(async (message: ReactNode, defaultValue?: string, title?: string, multiLine?: boolean) => {
+    return openDialog({ message, title, type: 'prompt', defaultValue, multiLine });
   }, [openDialog]);
 
   return (

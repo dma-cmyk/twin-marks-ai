@@ -55,9 +55,9 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
       const settings = await chrome.storage.local.get(['geminiApiKey', 'embeddingModel', 'generationModel', 'extractionEngine', 'useImageAnalysis']);
       const apiKey = settings.geminiApiKey as string;
       const embedModelName = (settings.embeddingModel || 'models/embedding-001') as string;
-      const genModelName = (settings.generationModel || 'models/gemini-1.5-flash') as string;
+      const genModelName = (settings.generationModel || 'models/gemini-2.5-flash-lite') as string;
       const engine = (settings.extractionEngine || 'defuddle') as 'defuddle' | 'turndown';
-      const useImageAnalysis = settings.useImageAnalysis === true; // Default false
+      const useImageAnalysis = settings.useImageAnalysis !== false; // Default true
 
       if (!apiKey) {
         console.error('API Key not found');
@@ -106,9 +106,13 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
       if (!response) {
           throw new Error('抽出レスポンスが空です。');
       }
-
-      const { title, url, text } = response;
+      
+      const { title, url, text, h1, metaDescription } = response;
       console.log(`Content extracted via content script using ${engine}, text length: ${text.length}`);
+
+      // 既存のデータを取得（メモを保持するため）
+      const existingData = await getVector(url);
+      const existingNotes = existingData?.notes || "";
 
       // スクリーンショットの取得（マルチモーダル解析用）
       let screenshotData: string | undefined;
@@ -123,15 +127,15 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
       // 3. AI処理（並列実行）
       let generatedDescription = "";
       
-      // Check if model supports multimodal (simple heuristic)
-      const isMultimodalModel = genModelName.includes('gemini-1.5') || genModelName.includes('vision');
+      // Check if model supports multimodal
+      const isMultimodalModel = genModelName.includes('gemini-1.5') || genModelName.includes('gemini-2') || genModelName.includes('vision');
       
       if (screenshotData && isMultimodalModel) {
-          // 画像がある場合（マルチモーダル）
+          // 画像がある場合（マルチモーダル優先）
           const descriptionPrompt = `
-以下のWebページの画像（スクリーンショット）とテキスト内容から、このページが何について書かれているか、どのようなコンテンツ（記事、ツール、図表、ログイン画面など）であるか、日本語で詳細に説明してください。
+以下のWebページの画像（スクリーンショット）と提供されたメタデータから、このページが何について書かれているか、どのようなコンテンツ（記事、ツール、図表、ログイン画面など）であるか、日本語で詳細に説明してください。
 また、このページの内容を表す**大まかなカテゴリタグ**を3〜5個生成してください。
-タグは細かい固有名詞（例: "React 19", "iPhone 15 Pro"）ではなく、**一般的な分類**（例: "Web開発", "スマートフォン", "ニュース", "プログラミング", "デザイン", "AI", "ビジネス"）を選んでください。
+タグは細かい固有名詞ではなく、**一般的な分類**（例: "Web開発", "ニュース", "AI", "ビジネス", "ショッピング"）を選んでください。
 
 出力形式:
 [説明文]
@@ -140,7 +144,9 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
 
 タイトル: ${title}
 URL: ${url}
-抽出テキスト: ${text.substring(0, 1000)}...
+H1: ${h1 || 'なし'}
+Meta Description: ${metaDescription || 'なし'}
+本文（冒頭1000文字）: ${text.substring(0, 1000)}...
           `.trim();
           try {
               generatedDescription = await generateText(descriptionPrompt, apiKey, genModelName, screenshotData);
@@ -194,9 +200,8 @@ ${text.substring(0, 5000)}`,
           
           const candidateModels = [
               embedModelName, 
-              'models/text-embedding-004', 
-              'models/embedding-001', 
-              'models/gemini-embedding-001'
+              'models/text-embedding-001',
+              'models/embedding-001'
           ];
           const uniqueModels = Array.from(new Set(candidateModels));
 
@@ -238,10 +243,15 @@ ${description}`,
 
       const [vector, shortSummary] = await Promise.all([embeddingPromise, summaryPromise]);
       
-      // Generate semantic vector based on long description + tags
+      // Generate semantic vector based on long description + tags + notes
       let semanticVector: number[] | undefined;
       try {
-          const textToEmbed = `${description.substring(0, 1000)}\nTags: ${tags.join(', ')}`;
+          const textToEmbed = [
+              description.substring(0, 1000),
+              tags.length > 0 ? `Tags: ${tags.join(', ')}` : '',
+              existingNotes ? `Notes: ${existingNotes}` : ''
+          ].filter(Boolean).join('\n');
+
           const candidateModels = [embedModelName, 'models/embedding-001'];
           for (const m of candidateModels) {
               try {
@@ -255,7 +265,7 @@ ${description}`,
           console.error("Failed to generate semantic vector", e);
       }
       
-      await storeVector(url, title, vector, text, shortSummary, true, tags, semanticVector);
+      await storeVector(url, title, vector, text, shortSummary, true, tags, semanticVector, existingNotes);
       chrome.runtime.sendMessage({ type: 'VECTOR_UPDATED' }).catch(() => {});
 
       await safeSetBadgeText({ tabId: tab.id, text: 'OK' });

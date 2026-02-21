@@ -14,6 +14,7 @@ interface VectorDB extends DBSchema {
       description?: string;
       isSaved?: boolean;
       tags?: string[];
+      notes?: string; // New field for user notes
       category?: string; // New field for RAG optimization
     };
     indexes: { 'by-url': string, 'by-saved': number, 'by-category': string, 'by-semantic': number };
@@ -22,7 +23,7 @@ interface VectorDB extends DBSchema {
 
 const DB_NAME = 'TwinMarksVectorDB';
 const STORE_NAME = 'vectors';
-const DB_VERSION = 5;
+const DB_VERSION = 6;
 
 const normalizeUrl = (url: string): string => {
     try {
@@ -62,9 +63,11 @@ export const initDB = async () => {
       if (oldVersion < 5) {
         const store = transaction.objectStore(STORE_NAME);
         if (store && !store.indexNames.contains('by-semantic')) {
-           // We can't easily index the vector itself, but we can't hide it either
-           // Actually, indexing a regular field is fine if needed for existence checks
+           // No-op for now
         }
+      }
+      if (oldVersion < 6) {
+        // notes field is added, no index needed for now
       }
     },
   });
@@ -78,7 +81,8 @@ export const storeVector = async (
   description?: string, 
   isSaved?: boolean, 
   newAITags?: string[],
-  semanticVector?: number[]
+  semanticVector?: number[],
+  notes?: string
 ) => {
   const normUrl = normalizeUrl(url);
   const db = await initDB();
@@ -102,6 +106,7 @@ export const storeVector = async (
     description,
     isSaved: isSaved !== undefined ? isSaved : (existing?.isSaved || false),
     tags: mergedTags,
+    notes: notes !== undefined ? notes : existing?.notes,
     category: existing?.category // カテゴリ情報を保持
   });
 };
@@ -194,6 +199,43 @@ export const updateItemTags = async (url: string, tags: string[]) => {
         item.tags = tags;
         await db.put(STORE_NAME, item);
     }
+};
+
+/**
+ * タグとメモを更新し、それに基づいてセマンティックベクトルを再生成する
+ */
+export const updateItemMetadataWithRegeneration = async (
+    url: string, 
+    metadata: { tags?: string[], notes?: string },
+    apiKey: string,
+    modelName: string = 'models/embedding-001'
+) => {
+    const normUrl = normalizeUrl(url);
+    const db = await initDB();
+    const item = await db.get(STORE_NAME, normUrl);
+    if (!item) return;
+
+    if (metadata.tags !== undefined) item.tags = metadata.tags;
+    if (metadata.notes !== undefined) item.notes = metadata.notes;
+
+    // セマンティックベクトルの再生成
+    // 元の説明文 + タグ + メモ を組み合わせて埋め込みを作成
+    const contentToEmbed = [
+        item.description || item.title,
+        (item.tags && item.tags.length > 0) ? `Tags: ${item.tags.join(', ')}` : '',
+        (item.notes) ? `Notes: ${item.notes}` : ''
+    ].filter(Boolean).join('\n');
+
+    try {
+        const { getEmbedding } = await import('./embedding');
+        const newSemanticVector = await getEmbedding(contentToEmbed, apiKey, modelName);
+        item.semanticVector = newSemanticVector;
+    } catch (e) {
+        console.error("Failed to regenerate semantic vector:", e);
+        // ベクトル更新に失敗しても、メタデータ自体は保存する（フォールバック）
+    }
+
+    await db.put(STORE_NAME, item);
 };
 
 export const clearAllVectors = async () => {

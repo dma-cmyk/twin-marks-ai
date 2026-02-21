@@ -89,17 +89,26 @@ const createTextSprite = (text: string, color: string) => {
 };
 
 // Helper for glow texture
-const createGlowTexture = (color: string) => {
+const createGlowTexture = (color: string, outlineOnly: boolean = false) => {
     const canvas = document.createElement('canvas');
     canvas.width = 64;
     canvas.height = 64;
     const ctx = canvas.getContext('2d')!;
-    const gradient = ctx.createRadialGradient(32, 32, 0, 32, 32, 32);
-    gradient.addColorStop(0, color);
-    gradient.addColorStop(0.5, 'rgba(255, 200, 0, 0.2)');
-    gradient.addColorStop(1, 'rgba(0,0,0,0)');
-    ctx.fillStyle = gradient;
-    ctx.fillRect(0, 0, 64, 64);
+    
+    if (outlineOnly) {
+        ctx.strokeStyle = color;
+        ctx.lineWidth = 4;
+        ctx.beginPath();
+        ctx.arc(32, 32, 30, 0, Math.PI * 2);
+        ctx.stroke();
+    } else {
+        const gradient = ctx.createRadialGradient(32, 32, 0, 32, 32, 32);
+        gradient.addColorStop(0, color);
+        gradient.addColorStop(0.5, 'rgba(255, 200, 0, 0.2)');
+        gradient.addColorStop(1, 'rgba(0,0,0,0)');
+        ctx.fillStyle = gradient;
+        ctx.fillRect(0, 0, 64, 64);
+    }
     return new THREE.CanvasTexture(canvas);
 };
 
@@ -110,6 +119,8 @@ export const NetworkGraph3D: React.FC<NetworkGraph3DProps> = ({ onNodeClick, cla
   
   // UI States
   const [threshold, setThreshold] = useState(0.75);
+  const [iconSize, setIconSize] = useState(1.0);
+  const [graphTheme, setGraphTheme] = useState<'universe' | 'cyberpunk' | 'deep-sea'>('universe');
   const [showControls, setShowControls] = useState(false);
   const [showClusters, setShowClusters] = useState(true);
   const [showStars, setShowStars] = useState(true);
@@ -139,6 +150,15 @@ export const NetworkGraph3D: React.FC<NetworkGraph3DProps> = ({ onNodeClick, cla
   const mouse = useRef(new THREE.Vector2());
   const lastClickWasLabel = useRef(false);
 
+  // Load settings
+  useEffect(() => {
+    chrome.storage?.local.get(['iconSize', 'graphTheme', 'threshold'], (result) => {
+        if (result.iconSize !== undefined) setIconSize(result.iconSize as number);
+        if (result.graphTheme) setGraphTheme(result.graphTheme as 'universe' | 'cyberpunk' | 'deep-sea');
+        if (result.threshold !== undefined) setThreshold(result.threshold as number);
+    });
+  }, []);
+
   // Resize listener
   useEffect(() => {
       if (containerRef.current) {
@@ -154,6 +174,26 @@ export const NetworkGraph3D: React.FC<NetworkGraph3DProps> = ({ onNodeClick, cla
           return () => resizeObserver.disconnect();
       }
   }, []);
+
+  // Persistence: Load settings
+  useEffect(() => {
+    chrome.storage.local.get(['graph_threshold_3d', 'graph_showClusters_3d', 'graph_showStars_3d', 'iconSize'], (res) => {
+        if (res.graph_threshold_3d !== undefined) setThreshold(res.graph_threshold_3d as number);
+        if (res.graph_showClusters_3d !== undefined) setShowClusters(res.graph_showClusters_3d as boolean);
+        if (res.graph_showStars_3d !== undefined) setShowStars(res.graph_showStars_3d as boolean);
+        if (res.iconSize !== undefined) setIconSize(res.iconSize as number);
+    });
+  }, []);
+
+  // Persistence: Save settings
+  useEffect(() => {
+    chrome.storage.local.set({
+        graph_threshold_3d: threshold,
+        graph_showClusters_3d: showClusters,
+        graph_showStars_3d: showStars,
+        iconSize: iconSize
+    });
+  }, [threshold, showClusters, showStars, iconSize]);
 
   const focusOnNode = (node: CustomNode) => {
     if (node.x !== undefined && node.y !== undefined && node.z !== undefined && fgRef.current) {
@@ -388,27 +428,236 @@ export const NetworkGraph3D: React.FC<NetworkGraph3DProps> = ({ onNodeClick, cla
     return false;
   }, [data.clusters, showClusters]);
 
-  // Starfield
+  // マルチ・ギャラクシー（深宇宙）を創るためのヘルパー:
+  const createNebulaTexture = (color1: string, color2: string) => {
+    const canvas = document.createElement('canvas');
+    canvas.width = 512; canvas.height = 512;
+    const ctx = canvas.getContext('2d')!;
+    const grad = ctx.createRadialGradient(256, 256, 0, 256, 256, 256);
+    grad.addColorStop(0, color1);
+    grad.addColorStop(0.5, color2);
+    grad.addColorStop(1, 'rgba(0,0,0,0)');
+    ctx.fillStyle = grad;
+    ctx.fillRect(0, 0, 512, 512);
+    for (let i = 0; i < 120; i++) {
+        const x = Math.random() * 512;
+        const y = Math.random() * 512;
+        const r = Math.random() * 100 + 40;
+        const dx = x - 256, dy = y - 256;
+        if (dx*dx + dy*dy > 250*250) continue; 
+        const g = ctx.createRadialGradient(x, y, 0, x, y, r);
+        const opacity = (Math.random() * 0.08 + 0.02);
+        g.addColorStop(0, color2.replace(/0\.[0-9]+/g, opacity.toString()));
+        g.addColorStop(1, 'rgba(0,0,0,0)');
+        ctx.fillStyle = g;
+        ctx.globalAlpha = 0.6;
+        ctx.fillRect(0, 0, 512, 512);
+    }
+    return new THREE.CanvasTexture(canvas);
+  };
+
+  const nebulaRef = useRef<THREE.Group | null>(null);
+  const starMaterialRef = useRef<THREE.ShaderMaterial | null>(null);
+
+  // Starfield and Deep Space Objects
   useEffect(() => {
     const timer = setTimeout(() => {
         if (!fgRef.current) return;
         const scene = fgRef.current.scene();
+        
+        // Enhance Starfield (Multi-Galactic Structure)
         if (!starsRef.current) {
+            const starsCount = 100000; 
             const starsGeometry = new THREE.BufferGeometry();
-            const starsCount = 6000;
             const posArray = new Float32Array(starsCount * 3);
-            for(let i=0; i<starsCount * 3; i++) posArray[i] = (Math.random() - 0.5) * 5000;
+            const colorArray = new Float32Array(starsCount * 3);
+            const sizeArray = new Float32Array(starsCount);
+            const alphaArray = new Float32Array(starsCount);
+            const randomOffsetArray = new Float32Array(starsCount);
+
+            // Define Multiple Galactic Centers
+            const galaxies = [
+                { pos: new THREE.Vector3(0, 0, 0), rot: new THREE.Euler(0.2, 0, 0.1), scale: 1.0, color: 'warm' }, // Central Galaxy
+                { pos: new THREE.Vector3(5000, 2000, -3000), rot: new THREE.Euler(1.2, 0.5, 0.3), scale: 0.7, color: 'blue' }, // Top Right Distant
+                { pos: new THREE.Vector3(-4000, -1500, 2000), rot: new THREE.Euler(-0.5, -0.8, -0.2), scale: 0.8, color: 'violet' }, // Bottom Left
+                { pos: new THREE.Vector3(2000, -3000, 5000), rot: new THREE.Euler(0.4, 2.1, 0.9), scale: 0.6, color: 'gold' }  // Front Down
+            ];
+            
+            for(let i=0; i<starsCount; i++) {
+                let worldPos = new THREE.Vector3();
+                let pAlpha, size, baseColor = new THREE.Color(1, 1, 1);
+                
+                // 85% of stars belong to a galaxy, 15% are background intergalactic stars
+                if (Math.random() < 0.85) {
+                    const galaxy = galaxies[Math.floor(Math.random() * galaxies.length)];
+                    const localPos = new THREE.Vector3();
+                    
+                    const dType = Math.random();
+                    if (dType < 0.3) { // Bulge
+                        const radius = Math.pow(Math.random(), 2) * 1800 * galaxy.scale;
+                        const theta = Math.random() * Math.PI * 2;
+                        const phi = Math.random() * Math.PI;
+                        localPos.set(radius * Math.sin(phi) * Math.cos(theta), radius * Math.cos(phi) * 0.75, radius * Math.sin(phi) * Math.sin(theta));
+                        pAlpha = 0.5 + Math.random() * 0.5;
+                        size = (1.0 + Math.random() * 1.5) * galaxy.scale;
+                    } else { // Disk
+                        const radius = (1200 + Math.random() * 7000) * galaxy.scale;
+                        const theta = Math.random() * Math.PI * 2;
+                        const thickness = (Math.random() - 0.5) * 400 * galaxy.scale * (1.0 - radius/(8000*galaxy.scale) + 0.1);
+                        localPos.set(radius * Math.cos(theta), thickness, radius * Math.sin(theta));
+                        pAlpha = 0.2 + Math.random() * 0.6;
+                        size = (0.7 + Math.random() * 1.2) * galaxy.scale;
+                    }
+
+                    // Rotate and Translate to World coordinates
+                    localPos.applyEuler(galaxy.rot);
+                    worldPos.addVectors(galaxy.pos, localPos);
+
+                    // Galaxy Thematic Coloring
+                    if (galaxy.color === 'blue') baseColor.setRGB(0.7, 0.85, 1.0);
+                    else if (galaxy.color === 'violet') baseColor.setRGB(0.9, 0.7, 1.0);
+                    else if (galaxy.color === 'gold') baseColor.setRGB(1.0, 0.9, 0.6);
+                    else baseColor.setRGB(1.0, 0.95, 0.9); // warm/white
+                } else {
+                    // Intergalactic background stars
+                    const dist = 7000 + Math.random() * 8000;
+                    const theta = Math.random() * Math.PI * 2;
+                    const phi = Math.random() * Math.PI;
+                    worldPos.set(dist * Math.sin(phi) * Math.cos(theta), dist * Math.sin(phi) * Math.sin(theta), dist * Math.cos(phi));
+                    pAlpha = 0.05 + Math.random() * 0.3;
+                    size = 0.4 + Math.random() * 0.7;
+                }
+
+                posArray[i * 3] = worldPos.x;
+                posArray[i * 3 + 1] = worldPos.y;
+                posArray[i * 3 + 2] = worldPos.z;
+                
+                // Final Star Jitter and Color Tweak
+                const cTweak = 0.9 + Math.random() * 0.1;
+                colorArray[i * 3] = baseColor.r * cTweak;
+                colorArray[i * 3 + 1] = baseColor.g * cTweak;
+                colorArray[i * 3 + 2] = baseColor.b * cTweak;
+                
+                // Occasional Rare variants
+                if (Math.random() > 0.99) { // Blue Supergiants
+                    colorArray[i * 3] *= 0.8; colorArray[i * 3 + 1] *= 0.9; colorArray[i * 3 + 2] = 1.0;
+                    size *= 2.5;
+                }
+
+                sizeArray[i] = size;
+                alphaArray[i] = pAlpha;
+                randomOffsetArray[i] = Math.random() * Math.PI * 2;
+            }
+            
             starsGeometry.setAttribute('position', new THREE.BufferAttribute(posArray, 3));
-            const starsMaterial = new THREE.PointsMaterial({ size: 1.5, color: 0xffffff, transparent: true, opacity: 0.6, sizeAttenuation: true });
-            starsRef.current = new THREE.Points(starsGeometry, starsMaterial);
+            starsGeometry.setAttribute('color', new THREE.BufferAttribute(colorArray, 3));
+            starsGeometry.setAttribute('size', new THREE.BufferAttribute(sizeArray, 1));
+            starsGeometry.setAttribute('pAlpha', new THREE.BufferAttribute(alphaArray, 1));
+            starsGeometry.setAttribute('pOffset', new THREE.BufferAttribute(randomOffsetArray, 1));
+            
+            const starMaterial = new THREE.ShaderMaterial({
+                uniforms: { uTime: { value: 0 }, uOpacity: { value: 0.9 } },
+                vertexShader: `
+                    attribute float size;
+                    attribute float pAlpha;
+                    attribute float pOffset;
+                    varying float vAlpha;
+                    varying vec3 vColor;
+                    uniform float uTime;
+                    void main() {
+                        vColor = color;
+                        float twinkle = 0.75 + 0.25 * sin(uTime * (1.2 + pOffset * 0.5) + pOffset);
+                        vAlpha = pAlpha * twinkle;
+                        vec4 mvPosition = modelViewMatrix * vec4(position, 1.0);
+                        gl_PointSize = size * (450.0 / -mvPosition.z);
+                        gl_Position = projectionMatrix * mvPosition;
+                    }
+                `,
+                fragmentShader: `
+                    varying vec3 vColor;
+                    varying float vAlpha;
+                    uniform float uOpacity;
+                    void main() {
+                        float d = distance(gl_PointCoord, vec2(0.5, 0.5));
+                        if (d > 0.5) discard;
+                        float core = smoothstep(0.5, 0.0, d);
+                        float glow = exp(-d * 9.0);
+                        gl_FragColor = vec4(vColor, vAlpha * uOpacity * (core * 0.6 + glow * 0.4));
+                    }
+                `,
+                transparent: true,
+                vertexColors: true,
+                blending: THREE.AdditiveBlending,
+                depthWrite: false
+            });
+            
+            starMaterialRef.current = starMaterial;
+            starsRef.current = new THREE.Points(starsGeometry, starMaterial);
             scene.add(starsRef.current);
+            
+            let startTime = Date.now();
+            const animateStars = () => {
+                if (starMaterialRef.current) starMaterialRef.current.uniforms.uTime.value = (Date.now() - startTime) / 1000;
+                requestAnimationFrame(animateStars);
+            };
+            animateStars();
         }
-        if (starsRef.current) {
-            starsRef.current.visible = showStars;
+
+        // Add Multi-Galactic Nebulae & Glow Bulges
+        if (!nebulaRef.current) {
+            const group = new THREE.Group();
+            
+            const galaxies = [
+                { pos: new THREE.Vector3(0, 0, 0), rot: new THREE.Euler(0.2, 0, 0.1), scale: 1.0, colorTheme: ['rgba(255, 200, 150, 0.12)', 'rgba(255, 100, 50, 0)'] },
+                { pos: new THREE.Vector3(5000, 2000, -3000), rot: new THREE.Euler(1.2, 0.5, 0.3), scale: 1.2, colorTheme: ['rgba(100, 150, 255, 0.1)', 'rgba(50, 80, 255, 0)'] },
+                { pos: new THREE.Vector3(-4000, -1500, 2000), rot: new THREE.Euler(-0.5, -0.8, -0.2), scale: 1.1, colorTheme: ['rgba(200, 100, 255, 0.1)', 'rgba(100, 50, 200, 0)'] },
+                { pos: new THREE.Vector3(2000, -3000, 5000), rot: new THREE.Euler(0.4, 2.1, 0.9), scale: 0.9, colorTheme: ['rgba(255, 220, 100, 0.1)', 'rgba(200, 150, 50, 0)'] }
+            ];
+
+            galaxies.forEach(galaxy => {
+                // 1. Bulge Glow for each galaxy
+                const bulgeTex = createNebulaTexture(galaxy.colorTheme[0], galaxy.colorTheme[1]);
+                const bulgeMat = new THREE.SpriteMaterial({ map: bulgeTex, transparent: true, opacity: 0.25, blending: THREE.AdditiveBlending, depthWrite: false });
+                const bulgeSprite = new THREE.Sprite(bulgeMat);
+                bulgeSprite.position.copy(galaxy.pos);
+                bulgeSprite.scale.set(6000 * galaxy.scale, 5000 * galaxy.scale, 1);
+                group.add(bulgeSprite);
+
+                // 2. Localized Nebulae
+                const nebulaColors = [
+                    ['rgba(40, 50, 200, 0.12)', 'rgba(20, 20, 100, 0)'],
+                    ['rgba(200, 50, 100, 0.1)', 'rgba(100, 20, 50, 0)'],
+                    ['rgba(50, 200, 150, 0.08)', 'rgba(20, 100, 70, 0)']
+                ];
+
+                for (let i = 0; i < 15; i++) {
+                    const colorPair = nebulaColors[Math.floor(Math.random() * nebulaColors.length)];
+                    const tex = createNebulaTexture(colorPair[0], colorPair[1]);
+                    const mat = new THREE.SpriteMaterial({ map: tex, transparent: true, opacity: 0.2 + Math.random() * 0.2, blending: THREE.AdditiveBlending, depthWrite: false });
+                    const sprite = new THREE.Sprite(mat);
+                    
+                    const radius = (1500 + Math.random() * 5000) * galaxy.scale;
+                    const theta = Math.random() * Math.PI * 2;
+                    const localPos = new THREE.Vector3(radius * Math.cos(theta), (Math.random() - 0.5) * 1500 * galaxy.scale, radius * Math.sin(theta));
+                    localPos.applyEuler(galaxy.rot);
+                    sprite.position.addVectors(galaxy.pos, localPos);
+                    
+                    const size = (3000 + Math.random() * 4000) * galaxy.scale;
+                    sprite.scale.set(size, size, 1);
+                    sprite.rotation.z = Math.random() * Math.PI;
+                    group.add(sprite);
+                }
+            });
+
+            nebulaRef.current = group;
+            scene.add(group);
         }
+
+        if (starsRef.current) starsRef.current.visible = showStars && graphTheme === 'universe';
+        if (nebulaRef.current) nebulaRef.current.visible = showStars && graphTheme === 'universe';
     }, 1000);
     return () => clearTimeout(timer);
-  }, [showStars]);
+  }, [showStars, graphTheme]);
 
   // Sync clusters
   useEffect(() => {
@@ -506,17 +755,141 @@ export const NetworkGraph3D: React.FC<NetworkGraph3DProps> = ({ onNodeClick, cla
                 const isFocused = selectedClusterId === null || isSelected;
                 (label.material as THREE.SpriteMaterial).opacity = isFocused ? 1.0 : 0.1;
             }
-        });
-    }
-    clusterObjects.current.forEach((obj, id) => {
+            });
+        }
+
+        // Cleanup removed clusters
+        clusterObjects.current.forEach((obj, id) => {
             if (!data.clusters?.find(c => c.id === id) || !showClusters) {
                 scene.remove(obj);
                 clusterObjects.current.delete(id);
             }
         });
+
+        // Scene objects management
+        let grid = scene.getObjectByName('cyberpunkGrid');
+        let dataStream = scene.getObjectByName('cyberpunkDataStream') as THREE.Points;
+        let bubbles = scene.getObjectByName('deepSeaBubbles') as THREE.Points;
+        let snow = scene.getObjectByName('deepSeaSnow') as THREE.Points;
+        
+        if (graphTheme === 'cyberpunk') {
+            if (bubbles) bubbles.visible = false;
+            if (snow) snow.visible = false;
+
+            if (!grid) {
+                grid = new THREE.GridHelper(10000, 100, 0x0ea5e9, 0x1e293b);
+                grid.position.y = -2000;
+                grid.name = 'cyberpunkGrid';
+                scene.add(grid);
+            }
+            grid.visible = showStars;
+
+            if (!dataStream) {
+                const count = 2000;
+                const geom = new THREE.BufferGeometry();
+                const pos = new Float32Array(count * 3);
+                for(let i=0; i<count; i++) {
+                    pos[i*3] = (Math.random() - 0.5) * 6000;
+                    pos[i*3+1] = (Math.random() - 0.5) * 6000;
+                    pos[i*3+2] = (Math.random() - 0.5) * 6000;
+                }
+                geom.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+                dataStream = new THREE.Points(geom, new THREE.PointsMaterial({ color: 0x0ea5e9, size: 4, transparent: true, opacity: 0.4, blending: THREE.AdditiveBlending }));
+                dataStream.name = 'cyberpunkDataStream';
+                scene.add(dataStream);
+            }
+            dataStream.visible = showStars;
+            
+            // Animate data stream
+            dataStream.rotation.y += 0.01;
+            const positions = dataStream.geometry.attributes.position.array as Float32Array;
+            for(let i=0; i<positions.length; i+=3) {
+                positions[i+1] -= 20;
+                if (positions[i+1] < -3000) positions[i+1] = 3000;
+            }
+            dataStream.geometry.attributes.position.needsUpdate = true;
+        } else if (graphTheme === 'deep-sea') {
+            if (grid) grid.visible = false;
+            if (dataStream) dataStream.visible = false;
+            
+            if (!bubbles) {
+                // Varied rising bubbles
+                const count = 1500;
+                const geom = new THREE.BufferGeometry();
+                const pos = new Float32Array(count * 3);
+                const speeds = new Float32Array(count);
+                for(let i=0; i<count; i++) {
+                    pos[i*3] = (Math.random() - 0.5) * 8000;
+                    pos[i*3+1] = (Math.random() - 0.5) * 8000;
+                    pos[i*3+2] = (Math.random() - 0.5) * 8000;
+                    speeds[i] = 5 + Math.random() * 20;
+                }
+                geom.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+                geom.setAttribute('speed', new THREE.BufferAttribute(speeds, 1));
+                bubbles = new THREE.Points(geom, new THREE.PointsMaterial({ 
+                    color: 0x99f6e4, 
+                    size: 8, 
+                    transparent: true, 
+                    opacity: 0.3, 
+                    blending: THREE.AdditiveBlending 
+                }));
+                bubbles.name = 'deepSeaBubbles';
+                scene.add(bubbles);
+            }
+            bubbles.visible = showStars;
+            
+            // Rising bubbles
+            const bPos = bubbles.geometry.attributes.position.array as Float32Array;
+            const bSpeeds = bubbles.geometry.attributes.speed.array as Float32Array;
+            for(let i=0; i<bPos.length/3; i++) {
+                bPos[i*3+1] += bSpeeds[i];
+                if (bPos[i*3+1] > 4000) bPos[i*3+1] = -4000;
+                // Wobble
+                bPos[i*3] += Math.sin(Date.now() * 0.001 + i) * 2;
+            }
+            bubbles.geometry.attributes.position.needsUpdate = true;
+
+            if (!snow) {
+                // Drifting marine snow
+                const count = 3000;
+                const geom = new THREE.BufferGeometry();
+                const pos = new Float32Array(count * 3);
+                for(let i=0; i<count; i++) {
+                    pos[i*3] = (Math.random() - 0.5) * 8000;
+                    pos[i*3+1] = (Math.random() - 0.5) * 8000;
+                    pos[i*3+2] = (Math.random() - 0.5) * 8000;
+                }
+                geom.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+                snow = new THREE.Points(geom, new THREE.PointsMaterial({ 
+                    color: 0xffffff, 
+                    size: 3, 
+                    transparent: true, 
+                    opacity: 0.15,
+                    depthWrite: false
+                }));
+                snow.name = 'deepSeaSnow';
+                scene.add(snow);
+            }
+            snow.visible = showStars;
+            
+            // Drifting snow
+            const sPos = snow.geometry.attributes.position.array as Float32Array;
+            for(let i=0; i<sPos.length/3; i++) {
+                sPos[i*3+1] -= 2; // slow fall
+                sPos[i*3] += Math.cos(Date.now() * 0.0005 + i) * 1;
+                if (sPos[i*3+1] < -4000) sPos[i*3+1] = 4000;
+            }
+            snow.geometry.attributes.position.needsUpdate = true;
+        } else {
+            if (grid) grid.visible = false;
+            if (dataStream) dataStream.visible = false;
+            if (bubbles) bubbles.visible = false;
+            if (snow) snow.visible = false;
+        }
+
     }, 100);
     return () => clearInterval(timer);
-  }, [data.clusters, data.nodes, showClusters, selectedClusterId]);
+  }, [data.clusters, data.nodes, showClusters, selectedClusterId, graphTheme, showStars]);
 
   return (
     <div 
@@ -644,16 +1017,69 @@ export const NetworkGraph3D: React.FC<NetworkGraph3DProps> = ({ onNodeClick, cla
           if (!texture) { texture = loader.load(faviconUrl); textureCache.set(faviconUrl, texture); }
           const isDimmed = (selectedClusterId !== null && n.clusterId !== selectedClusterId) || (searchResults.length > 0 && !n.isHighlighted);
           const group = new THREE.Group();
+          
           if (n.isHighlighted) {
               const glow = new THREE.Sprite(new THREE.SpriteMaterial({ map: createGlowTexture('rgba(255, 200, 0, 1.0)'), transparent: true, blending: THREE.AdditiveBlending, opacity: 0.8 }));
               glow.scale.set(40, 40, 1); group.add(glow);
           }
+
           const sprite = new THREE.Sprite(new THREE.SpriteMaterial({ map: texture, transparent: true, opacity: isDimmed ? 0.05 : 0.9 }));
           const isCurrent = searchResults.length > 0 && searchResults[currentSearchIndex]?.id === n.id;
-          const baseScale = n.isHighlighted ? 20 : 12;
+          const baseScale = (n.isHighlighted ? 20 : 12) * iconSize;
           const scale = isCurrent ? baseScale * 1.5 : baseScale;
           sprite.scale.set(scale, scale, 1);
           group.add(sprite);
+
+          // Icon outline for visibility
+          // ring variable removed
+          // Look at camera is handled by ForceGraph3D for Sprites, but for Meshes in a Group it's tricky.
+          // However, ForceGraph3D manages the whole object. If we use a Sprite for the ring too, it's safer.
+          const ringSprite = new THREE.Sprite(new THREE.SpriteMaterial({
+              map: createGlowTexture('rgba(255, 255, 255, 0.5)', true), // true means circle outline
+              transparent: true,
+              opacity: isDimmed ? 0.1 : 0.8
+          }));
+          ringSprite.scale.set(scale * 1.1, scale * 1.1, 1);
+          group.add(ringSprite);
+
+          if (graphTheme === 'cyberpunk') {
+              // Holographic Box Frame
+              const boxSize = scale * 1.1;
+              const boxGeom = new THREE.BoxGeometry(boxSize, boxSize, boxSize);
+              const edges = new THREE.EdgesGeometry(boxGeom);
+              const box = new THREE.LineSegments(
+                  edges,
+                  new THREE.LineBasicMaterial({ 
+                      color: n.clusterColor || '#3b82f6', 
+                      transparent: true, 
+                      opacity: isDimmed ? 0.05 : 0.4,
+                      blending: THREE.AdditiveBlending
+                  })
+              );
+              group.add(box);
+              
+              // Internal subtle light
+              const pointLight = new THREE.PointLight(n.clusterColor || '#3b82f6', isDimmed ? 0.1 : 0.5, scale * 2);
+              group.add(pointLight);
+          } else if (graphTheme === 'deep-sea') {
+              // Organic Bubble Shell
+              const bubbleSize = scale * 0.7;
+              const bubbleGeom = new THREE.SphereGeometry(bubbleSize, 32, 32);
+              const bubbleMat = new THREE.MeshPhongMaterial({
+                  color: n.clusterColor || '#99f6e4',
+                  transparent: true,
+                  opacity: isDimmed ? 0.05 : 0.3,
+                  shininess: 100,
+                  specular: 0xffffff
+              });
+              const bubble = new THREE.Mesh(bubbleGeom, bubbleMat);
+              group.add(bubble);
+              
+              // Internal subtle glow
+              const light = new THREE.PointLight(n.clusterColor || '#99f6e4', isDimmed ? 0.1 : 0.4, scale * 2);
+              group.add(light);
+          }
+
           group.userData = { clusterId: n.clusterId };
           return group;
         }}
@@ -686,7 +1112,11 @@ export const NetworkGraph3D: React.FC<NetworkGraph3DProps> = ({ onNodeClick, cla
                       <span>類似度閾値</span>
                       <span className="font-mono text-blue-400">{threshold.toFixed(2)}</span>
                   </div>
-                  <input type="range" min="0.5" max="0.99" step="0.01" value={threshold} onChange={e => setThreshold(parseFloat(e.target.value))} className="w-full h-1 bg-slate-700 rounded-lg appearance-none cursor-pointer accent-blue-500" />
+                  <input type="range" min="0.5" max="0.99" step="0.01" value={threshold} onChange={e => {
+                      const val = parseFloat(e.target.value);
+                      setThreshold(val);
+                      chrome.storage?.local.set({ threshold: val });
+                  }} className="w-full h-1 bg-slate-700 rounded-lg appearance-none cursor-pointer accent-blue-500" />
               </div>
               <div className="flex items-center justify-between pt-2 border-t border-slate-800">
                   <span className="text-xs text-slate-300">クラスターを表示</span>
@@ -695,10 +1125,59 @@ export const NetworkGraph3D: React.FC<NetworkGraph3DProps> = ({ onNodeClick, cla
                   </button>
               </div>
               <div className="flex items-center justify-between pt-2 border-t border-slate-800">
-                  <span className="text-xs text-slate-300">背景の星空を表示</span>
+                  <span className="text-xs text-slate-300">背景エフェクトを表示</span>
                   <button onClick={() => setShowStars(!showStars)} className={`w-10 h-5 rounded-full transition-colors relative ${showStars ? 'bg-blue-600' : 'bg-slate-700'}`}>
                       <div className={`absolute top-1 w-3 h-3 bg-white rounded-full transition-all ${showStars ? 'left-6' : 'left-1'}`} />
                   </button>
+              </div>
+
+              <div className="space-y-2 pt-2 border-t border-slate-800">
+                  <span className="text-xs text-slate-300">マップテーマ</span>
+                  <div className="flex bg-slate-950 border border-slate-800 rounded-lg p-0.5">
+                      <button 
+                          onClick={() => {
+                              setGraphTheme('universe');
+                              chrome.storage?.local.set({ graphTheme: 'universe' });
+                          }}
+                          className={`flex-1 px-1 py-1 rounded text-[9px] font-bold transition-all ${graphTheme === 'universe' ? 'bg-blue-600/20 text-blue-400 border border-blue-500/30' : 'text-slate-500 hover:text-slate-300'}`}
+                      >
+                          Universe
+                      </button>
+                      <button 
+                          onClick={() => {
+                              setGraphTheme('cyberpunk');
+                              chrome.storage?.local.set({ graphTheme: 'cyberpunk' });
+                          }}
+                          className={`flex-1 px-1 py-1 rounded text-[9px] font-bold transition-all ${graphTheme === 'cyberpunk' ? 'bg-cyan-600/20 text-cyan-400 border border-cyan-500/30' : 'text-slate-500 hover:text-slate-300'}`}
+                      >
+                          Cyberpunk
+                      </button>
+                      <button 
+                          onClick={() => {
+                              setGraphTheme('deep-sea');
+                              chrome.storage?.local.set({ graphTheme: 'deep-sea' });
+                          }}
+                          className={`flex-1 px-1 py-1 rounded text-[9px] font-bold transition-all ${graphTheme === 'deep-sea' ? 'bg-emerald-600/20 text-emerald-400 border border-emerald-500/30' : 'text-slate-500 hover:text-slate-300'}`}
+                      >
+                          DeepSea
+                      </button>
+                  </div>
+              </div>
+
+              <div className="space-y-2 pt-2 border-t border-slate-800">
+                  <div className="flex justify-between items-center text-xs text-slate-300">
+                      <span>アイコンサイズ</span>
+                      <span className="font-mono text-blue-400">{iconSize.toFixed(1)}x</span>
+                  </div>
+                  <input 
+                      type="range" min="0.5" max="5.0" step="0.1" value={iconSize} 
+                      onChange={(e) => {
+                          const val = parseFloat(e.target.value);
+                          setIconSize(val);
+                          chrome.storage?.local.set({ iconSize: val });
+                      }}
+                      className="w-full h-1 bg-slate-700 rounded-lg appearance-none cursor-pointer accent-blue-500" 
+                  />
               </div>
               <div className="pt-2">
                   <button

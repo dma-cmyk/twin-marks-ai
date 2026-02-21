@@ -63,6 +63,8 @@ export const NetworkGraph: React.FC<NetworkGraphProps> = ({ onNodeClick, classNa
   const [showStars, setShowStars] = useState(true);
   const [selectedClusterId, setSelectedClusterId] = useState<number | null>(null);
   const [threshold, setThreshold] = useState(0.75);
+  const [iconSize, setIconSize] = useState(1.0);
+  const [graphTheme, setGraphTheme] = useState<'universe' | 'cyberpunk' | 'deep-sea'>('universe');
   const [cachedVectors, setCachedVectors] = useState<any[]>([]);
 
   // AI Naming states
@@ -78,7 +80,16 @@ export const NetworkGraph: React.FC<NetworkGraphProps> = ({ onNodeClick, classNa
   const containerRef = useRef<HTMLDivElement>(null);
   const [dimensions, setDimensions] = useState({ width: 800, height: 600 });
   const labelRects = useRef<Map<number, { rx: number, ry: number, rw: number, rh: number }>>(new Map());
-  const stars = useRef<{x: number, y: number, size: number, alpha: number}[]>([]);
+  const stars = useRef<{x: number, y: number, size: number, alpha: number, speed?: number, type?: 'bubble' | 'snow'}[]>([]);
+
+  // Load settings
+  useEffect(() => {
+    chrome.storage?.local.get(['iconSize', 'graphTheme', 'threshold'], (result) => {
+        if (result.iconSize !== undefined) setIconSize(result.iconSize as number);
+        if (result.graphTheme) setGraphTheme(result.graphTheme as 'universe' | 'cyberpunk' | 'deep-sea');
+        if (result.threshold !== undefined) setThreshold(result.threshold as number);
+    });
+  }, []);
 
   // Resize listener
   useEffect(() => {
@@ -103,7 +114,9 @@ export const NetworkGraph: React.FC<NetworkGraphProps> = ({ onNodeClick, classNa
           x: Math.random(),
           y: Math.random(),
           size: Math.random() * 1.5 + 0.5,
-          alpha: Math.random() * 0.8 + 0.2
+          alpha: Math.random() * 0.8 + 0.2,
+          speed: Math.random() * 0.5 + 0.2,
+          type: Math.random() > 0.7 ? 'bubble' : 'snow' 
       }));
   }, []);
 
@@ -385,13 +398,82 @@ export const NetworkGraph: React.FC<NetworkGraphProps> = ({ onNodeClick, classNa
                 if (!ctx) return;
                 ctx.clearRect(0, 0, canvas.width, canvas.height);
                 if (!showStars) return;
-                stars.current.forEach(star => {
-                    ctx.globalAlpha = star.alpha;
-                    ctx.fillStyle = '#ffffff';
+
+                if (graphTheme === 'universe') {
+                    stars.current.forEach(star => {
+                        ctx.globalAlpha = star.alpha;
+                        ctx.fillStyle = '#ffffff';
+                        ctx.beginPath();
+                        ctx.arc(star.x * canvas.width, star.y * canvas.height, star.size, 0, Math.PI * 2);
+                        ctx.fill();
+                    });
+                } else if (graphTheme === 'cyberpunk') {
+                    // Cyberpunk Grid
+                    ctx.strokeStyle = 'rgba(59, 130, 246, 0.15)';
+                    ctx.lineWidth = 1;
+                    const gridSize = 40;
+                    const shift = (Date.now() / 50) % gridSize;
+
                     ctx.beginPath();
-                    ctx.arc(star.x * canvas.width, star.y * canvas.height, star.size, 0, Math.PI * 2);
-                    ctx.fill();
-                });
+                    for (let x = shift; x < canvas.width; x += gridSize) {
+                        ctx.moveTo(x, 0);
+                        ctx.lineTo(x, canvas.height);
+                    }
+                    for (let y = shift; y < canvas.height; y += gridSize) {
+                        ctx.moveTo(0, y);
+                        ctx.lineTo(canvas.width, y);
+                    }
+                    ctx.stroke();
+
+                    // Subtle scanning line
+                    const scanY = (Date.now() / 20) % canvas.height;
+                    const scanGrad = ctx.createLinearGradient(0, scanY - 50, 0, scanY);
+                    scanGrad.addColorStop(0, 'transparent');
+                    scanGrad.addColorStop(1, 'rgba(59, 130, 246, 0.05)');
+                    ctx.fillStyle = scanGrad;
+                    ctx.fillRect(0, scanY - 50, canvas.width, 50);
+                } else if (graphTheme === 'deep-sea') {
+                    // Deep Sea Gradient Background
+                    const grad = ctx.createLinearGradient(0, 0, 0, canvas.height);
+                    grad.addColorStop(0, '#020617'); // Deep Navy
+                    grad.addColorStop(1, '#064e3b'); // Deep Green
+                    ctx.fillStyle = grad;
+                    ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+                    // Bubbles and Marine Snow
+                    const time = Date.now() / 1000;
+                    stars.current.forEach(item => {
+                        if (item.type === 'bubble') {
+                            // Rising bubbles
+                            const bx = (item.x * canvas.width + Math.sin(time + item.y * 10) * 20) % canvas.width;
+                            const by = (item.y * canvas.height - time * 50 * (item.speed || 1)) % canvas.height;
+                            const bpos = by < 0 ? by + canvas.height : by;
+                            
+                            ctx.globalAlpha = item.alpha * 0.4;
+                            ctx.strokeStyle = '#99f6e4';
+                            ctx.lineWidth = 1;
+                            ctx.beginPath();
+                            ctx.arc(bx, bpos, item.size * 3, 0, Math.PI * 2);
+                            ctx.stroke();
+                            
+                            // Highlight on bubble
+                            ctx.beginPath();
+                            ctx.arc(bx - item.size, bpos - item.size, item.size * 0.5, 0, Math.PI * 2);
+                            ctx.fillStyle = '#ffffff';
+                            ctx.fill();
+                        } else {
+                            // Falling/Drifting marine snow
+                            const sx = (item.x * canvas.width + Math.cos(time * 0.5 + item.y) * 30) % canvas.width;
+                            const sy = (item.y * canvas.height + time * 10 * (item.speed || 1)) % canvas.height;
+                            
+                            ctx.globalAlpha = item.alpha * 0.3;
+                            ctx.fillStyle = '#f8fafc';
+                            ctx.beginPath();
+                            ctx.arc(sx, sy, item.size * 0.8, 0, Math.PI * 2);
+                            ctx.fill();
+                        }
+                    });
+                }
             }}
         />
 
@@ -403,6 +485,43 @@ export const NetworkGraph: React.FC<NetworkGraphProps> = ({ onNodeClick, classNa
             linkColor={() => '#334155'}
             linkDirectionalParticles={2}
             linkDirectionalParticleSpeed={d => (d as any).value * 0.01}
+            linkCanvasObject={(link: any, ctx, globalScale) => {
+                const start = link.source;
+                const end = link.target;
+                if (typeof start !== 'object' || typeof end !== 'object') return;
+
+                const isDimmed = (selectedClusterId !== null && (start.clusterId !== selectedClusterId || end.clusterId !== selectedClusterId)) || 
+                                (searchResults.length > 0 && (!start.isHighlighted || !end.isHighlighted));
+
+                ctx.beginPath();
+                ctx.moveTo(start.x, start.y);
+                
+                if (graphTheme === 'deep-sea') {
+                    // Sine wave link
+                    const dx = end.x - start.x;
+                    const dy = end.y - start.y;
+                    const dist = Math.sqrt(dx*dx + dy*dy);
+                    const angle = Math.atan2(dy, dx);
+                    const segments = Math.max(5, Math.floor(dist / 20));
+                    const time = Date.now() / 500;
+                    
+                    for (let i = 1; i <= segments; i++) {
+                        const t = i / segments;
+                        const x = start.x + dx * t;
+                        const y = start.y + dy * t;
+                        const offset = Math.sin(t * Math.PI * 2 + time + (link.index || 0)) * (4 / globalScale);
+                        const ox = x + Math.cos(angle + Math.PI/2) * offset;
+                        const oy = y + Math.sin(angle + Math.PI/2) * offset;
+                        ctx.lineTo(ox, oy);
+                    }
+                } else {
+                    ctx.lineTo(end.x, end.y);
+                }
+
+                ctx.strokeStyle = isDimmed ? 'rgba(255,255,255,0.05)' : (graphTheme === 'cyberpunk' ? 'rgba(56, 189, 248, 0.4)' : (graphTheme === 'deep-sea' ? 'rgba(153, 246, 228, 0.5)' : 'rgba(255,255,255,0.2)'));
+                ctx.lineWidth = (graphTheme === 'cyberpunk' ? 1.5 : (graphTheme === 'deep-sea' ? 2 : 1)) / globalScale;
+                ctx.stroke();
+            }}
             nodeCanvasObject={(node, ctx, globalScale) => {
                 const n = node as CustomNode;
                 const isDimmed = selectedClusterId !== null && n.clusterId !== selectedClusterId;
@@ -429,30 +548,143 @@ export const NetworkGraph: React.FC<NetworkGraphProps> = ({ onNodeClick, classNa
                     ctx.fill();
                 }
 
-                // 3. Draw favicon or colored circle
-                if (n.img) {
-                    const size = (n.val || 2) * 2 / globalScale + 4;
+                // 3. Draw favicon or colored circle/chip
+                const baseSize = (n.val || 2) * 2 / globalScale + 4;
+                const size = baseSize * iconSize;
+                
+                if (graphTheme === 'cyberpunk') {
+                    // Cyberpunk Rectangular Chip
                     ctx.save();
                     ctx.globalAlpha = alpha;
-                    ctx.beginPath();
-                    ctx.arc(n.x!, n.y!, size / 2, 0, Math.PI * 2);
-                    ctx.clip();
-                    ctx.drawImage(n.img, n.x! - size / 2, n.y! - size / 2, size, size);
-                    ctx.restore();
                     
-                    // Simple outline
+                    // Outer glow
+                    ctx.shadowBlur = 10 / globalScale;
+                    ctx.shadowColor = n.clusterColor || '#3b82f6';
+                    
+                    // Main body
+                    ctx.fillStyle = 'rgba(15, 23, 42, 0.9)';
                     ctx.beginPath();
-                    ctx.arc(n.x!, n.y!, size / 2, 0, Math.PI * 2);
+                    const r = 2 / globalScale; // corner radius
+                    ctx.roundRect(n.x! - size/2, n.y! - size/2, size, size, r);
+                    ctx.fill();
+                    
+                    // Border
                     ctx.strokeStyle = n.clusterColor || '#3b82f6';
                     ctx.lineWidth = 1 / globalScale;
                     ctx.stroke();
-                } else {
-                    const radius = (n.val || 2) / globalScale + 2;
+
+                    // Corner accents
+                    ctx.lineWidth = 2 / globalScale;
+                    const accentLen = size * 0.3;
                     ctx.beginPath();
-                    ctx.arc(n.x!, n.y!, radius, 0, 2 * Math.PI);
-                    ctx.fillStyle = n.clusterColor || '#3b82f6';
+                    // Top-left
+                    ctx.moveTo(n.x! - size/2, n.y! - size/2 + accentLen);
+                    ctx.lineTo(n.x! - size/2, n.y! - size/2);
+                    ctx.lineTo(n.x! - size/2 + accentLen, n.y! - size/2);
+                    // Bottom-right
+                    ctx.moveTo(n.x! + size/2 - accentLen, n.y! + size/2);
+                    ctx.lineTo(n.x! + size/2, n.y! + size/2);
+                    ctx.lineTo(n.x! + size/2, n.y! + size/2 - accentLen);
+                    ctx.stroke();
+                    
+                    ctx.restore();
+
+                    // Favicon inside chip
+                    if (n.img) {
+                        const imgSize = size * 0.7;
+                        ctx.save();
+                        ctx.globalAlpha = alpha;
+                        
+                        // Icon outline for visibility
+                        ctx.beginPath();
+                        ctx.rect(n.x! - imgSize / 2, n.y! - imgSize / 2, imgSize, imgSize);
+                        ctx.strokeStyle = '#ffffff';
+                        ctx.lineWidth = 0.5 / globalScale;
+                        ctx.stroke();
+
+                        ctx.beginPath();
+                        ctx.rect(n.x! - imgSize / 2, n.y! - imgSize / 2, imgSize, imgSize);
+                        ctx.clip();
+                        ctx.drawImage(n.img, n.x! - imgSize / 2, n.y! - imgSize / 2, imgSize, imgSize);
+                        ctx.restore();
+                    }
+                } else if (graphTheme === 'deep-sea') {
+                    // Deep Sea Organic Bubble
+                    ctx.save();
                     ctx.globalAlpha = alpha;
+                    const time = Date.now() / 1000;
+                    
+                    // Bubble glow
+                    const grad = ctx.createRadialGradient(n.x!, n.y!, size * 0.3, n.x!, n.y!, size * 0.8);
+                    grad.addColorStop(0, n.clusterColor || '#0ea5e9');
+                    grad.addColorStop(1, 'transparent');
+                    ctx.fillStyle = grad;
+                    
+                    ctx.beginPath();
+                    // Wobbling edge
+                    for(let i=0; i<12; i++) {
+                        const angle = (i/12) * Math.PI * 2;
+                        const idHash = n.id.split('').reduce((acc, char) => acc + char.charCodeAt(0), 0);
+                        const wobble = Math.sin(time * 2 + i + idHash) * (2 / globalScale);
+                        const r = (size * 0.6) + wobble;
+                        const px = n.x! + Math.cos(angle) * r;
+                        const py = n.y! + Math.sin(angle) * r;
+                        if(i===0) ctx.moveTo(px, py); else ctx.lineTo(px, py);
+                    }
+                    ctx.closePath();
                     ctx.fill();
+
+                    // Favicon in a circle
+                    if (n.img) {
+                        const imgSize = size * 0.6;
+                        ctx.save();
+                        
+                        // Icon outline for visibility
+                        ctx.beginPath();
+                        ctx.arc(n.x!, n.y!, imgSize / 2, 0, Math.PI * 2);
+                        ctx.strokeStyle = '#ffffff';
+                        ctx.lineWidth = 0.5 / globalScale;
+                        ctx.stroke();
+
+                        ctx.beginPath();
+                        ctx.arc(n.x!, n.y!, imgSize / 2, 0, Math.PI * 2);
+                        ctx.clip();
+                        ctx.drawImage(n.img, n.x! - imgSize / 2, n.y! - imgSize / 2, imgSize, imgSize);
+                        ctx.restore();
+                    }
+                    ctx.restore();
+                } else {
+                    // Original Universe Circle
+                    if (n.img) {
+                        // Icon outline for visibility
+                        ctx.beginPath();
+                        ctx.arc(n.x!, n.y!, size / 2, 0, Math.PI * 2);
+                        ctx.strokeStyle = '#ffffff';
+                        ctx.lineWidth = 0.5 / globalScale;
+                        ctx.stroke();
+
+                        ctx.save();
+                        ctx.globalAlpha = alpha;
+                        ctx.beginPath();
+                        ctx.arc(n.x!, n.y!, size / 2, 0, Math.PI * 2);
+                        ctx.clip();
+                        ctx.drawImage(n.img, n.x! - size / 2, n.y! - size / 2, size, size);
+                        ctx.restore();
+                        
+                        // Simple outline
+                        ctx.beginPath();
+                        ctx.arc(n.x!, n.y!, size / 2, 0, Math.PI * 2);
+                        ctx.strokeStyle = n.clusterColor || '#3b82f6';
+                        ctx.lineWidth = 1 / globalScale;
+                        ctx.stroke();
+                    } else {
+                        const radius = ((n.val || 2) / globalScale + 2) * iconSize;
+                        ctx.beginPath();
+                        ctx.arc(n.x!, n.y!, radius, 0, 2 * Math.PI);
+                        ctx.fillStyle = n.clusterColor || '#3b82f6';
+                        ctx.globalAlpha = alpha;
+                        ctx.fill();
+                    }
                 }
                 
                 ctx.shadowBlur = 0; // Reset shadow
@@ -697,7 +929,11 @@ export const NetworkGraph: React.FC<NetworkGraphProps> = ({ onNodeClick, classNa
                     </div>
                     <input 
                         type="range" min="0.5" max="0.99" step="0.01" value={threshold} 
-                        onChange={(e) => setThreshold(parseFloat(e.target.value))}
+                        onChange={(e) => {
+                            const val = parseFloat(e.target.value);
+                            setThreshold(val);
+                            chrome.storage?.local.set({ threshold: val });
+                        }}
                         className="w-full h-1 bg-slate-700 rounded-lg appearance-none cursor-pointer accent-blue-500"
                     />
                 </div>
@@ -709,10 +945,59 @@ export const NetworkGraph: React.FC<NetworkGraphProps> = ({ onNodeClick, classNa
                     </button>
                 </div>
                 <div className="flex items-center justify-between pt-2 border-t border-slate-800">
-                    <span className="text-xs text-slate-300">背景の星空を表示</span>
+                    <span className="text-xs text-slate-300">背景エフェクトを表示</span>
                     <button onClick={() => setShowStars(!showStars)} className={`w-10 h-5 rounded-full transition-colors relative ${showStars ? 'bg-blue-600' : 'bg-slate-700'}`}>
                         <div className={`absolute top-1 w-3 h-3 bg-white rounded-full transition-all ${showStars ? 'left-6' : 'left-1'}`} />
                     </button>
+                </div>
+
+                <div className="space-y-2 pt-2 border-t border-slate-800">
+                    <span className="text-xs text-slate-300">マップテーマ</span>
+                        <div className="flex bg-slate-950 border border-slate-800 rounded-lg p-0.5">
+                            <button 
+                                onClick={() => {
+                                    setGraphTheme('universe');
+                                    chrome.storage?.local.set({ graphTheme: 'universe' });
+                                }}
+                                className={`flex-1 px-1 py-1 rounded text-[9px] font-bold transition-all ${graphTheme === 'universe' ? 'bg-blue-600/20 text-blue-400 border border-blue-500/30' : 'text-slate-500 hover:text-slate-300'}`}
+                            >
+                                Universe
+                            </button>
+                            <button 
+                                onClick={() => {
+                                    setGraphTheme('cyberpunk');
+                                    chrome.storage?.local.set({ graphTheme: 'cyberpunk' });
+                                }}
+                                className={`flex-1 px-1 py-1 rounded text-[9px] font-bold transition-all ${graphTheme === 'cyberpunk' ? 'bg-cyan-600/20 text-cyan-400 border border-cyan-500/30' : 'text-slate-500 hover:text-slate-300'}`}
+                            >
+                                Cyberpunk
+                            </button>
+                            <button 
+                                onClick={() => {
+                                    setGraphTheme('deep-sea');
+                                    chrome.storage?.local.set({ graphTheme: 'deep-sea' });
+                                }}
+                                className={`flex-1 px-1 py-1 rounded text-[9px] font-bold transition-all ${graphTheme === 'deep-sea' ? 'bg-emerald-600/20 text-emerald-400 border border-emerald-500/30' : 'text-slate-500 hover:text-slate-300'}`}
+                            >
+                                DeepSea
+                            </button>
+                        </div>
+                </div>
+
+                <div className="space-y-2 pt-2 border-t border-slate-800">
+                    <div className="flex justify-between items-center text-xs text-slate-300">
+                        <span>アイコンサイズ</span>
+                        <span className="font-mono text-blue-400">{iconSize.toFixed(1)}x</span>
+                    </div>
+                    <input 
+                        type="range" min="0.5" max="5.0" step="0.1" value={iconSize} 
+                        onChange={(e) => {
+                            const val = parseFloat(e.target.value);
+                            setIconSize(val);
+                            chrome.storage?.local.set({ iconSize: val });
+                        }}
+                        className="w-full h-1 bg-slate-700 rounded-lg appearance-none cursor-pointer accent-blue-500"
+                    />
                 </div>
 
                 <div className="pt-2">

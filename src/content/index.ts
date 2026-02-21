@@ -10,10 +10,15 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
         const title = document.title;
 
         extractContent(engine).then(text => {
-            sendResponse({ title, url, text });
+            const h1 = document.querySelector('h1')?.innerText || '';
+            const metaDescription = document.querySelector('meta[name="description"]')?.getAttribute('content') || 
+                                   document.querySelector('meta[property="og:description"]')?.getAttribute('content') || '';
+            sendResponse({ title, url, text, h1, metaDescription });
         }).catch(err => {
             console.error("Extraction failed", err);
-            sendResponse({ title, url, text: document.body.innerText });
+            const h1 = document.querySelector('h1')?.innerText || '';
+            const metaDescription = document.querySelector('meta[name="description"]')?.getAttribute('content') || '';
+            sendResponse({ title, url, text: document.body.innerText, h1, metaDescription });
         });
         return true; 
     }

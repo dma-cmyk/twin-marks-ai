@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { removeVector, getAllVectors, exportData, importData, clearAllVectors, updateItemTags, getCategoryStats } from '../utils/vectorStore';
+import { removeVector, getAllVectors, exportData, importData, clearAllVectors, updateItemMetadataWithRegeneration, getCategoryStats } from '../utils/vectorStore';
 import { Grid, List as ListIcon, Search, BrainCircuit, Upload, Download, RefreshCw, Library, Trash2, Clock, SortAsc, Sparkles, Tag as TagIcon, Plus, CheckSquare, Minus, Wand2, FolderOpen, FolderOutput } from 'lucide-react';
 import { getEmbedding } from '../utils/embedding';
 import { similarity } from 'ml-distance';
@@ -9,6 +9,7 @@ import { useDialog } from '../context/DialogContext'; // Import
 import { optimizeTags } from '../utils/tagOptimizer'; // Import
 import { TagOptimizationModal } from './TagOptimizationModal'; // Import
 import { AutoOrganizeModal } from './AutoOrganizeModal';
+import { NotepadPanel } from './SavedPages/NotepadPanel';
 import { syncCategories } from '../utils/categoryService';
 
 const { cosine } = similarity;
@@ -24,13 +25,15 @@ export const SavedPages: React.FC<SavedPagesProps> = ({ onSelectUrl, className }
   const [displayItems, setDisplayItems] = useState<VectorItem[]>([]);
   const [viewMode, setViewMode] = useState<'list' | 'grid'>('grid');
   const [searchQuery, setSearchQuery] = useState('');
-  const [selectedTag, setSelectedTag] = useState<string | null>(null);
+  const [selectedTags, setSelectedTags] = useState<Set<string>>(new Set());
   const [selectedCategory, setSelectedCategory] = useState<string | null>(null);
+  const [activeNoteItem, setActiveNoteItem] = useState<VectorItem | null>(null);
   const [allTags, setAllTags] = useState<{name: string, count: number}[]>([]);
   const [allCategories, setAllCategories] = useState<{name: string, count: number}[]>([]);
   const [selectedItems, setSelectedItems] = useState<Set<string>>(new Set());
   const [sortBy, setSortBy] = useState<'date' | 'title' | 'similarity'>('date');
   const [showCategories, setShowCategories] = useState(false);
+  const [showTags, setShowTags] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -91,14 +94,16 @@ export const SavedPages: React.FC<SavedPagesProps> = ({ onSelectUrl, className }
   useEffect(() => {
     const processItems = async () => {
         let filtered = items.filter(item => {
-            const matchesSearch = item.title.toLowerCase().includes(searchQuery.toLowerCase()) || 
+                const matchesSearch = item.title.toLowerCase().includes(searchQuery.toLowerCase()) || 
             item.url.toLowerCase().includes(searchQuery.toLowerCase()) ||
             (item.description && item.description.toLowerCase().includes(searchQuery.toLowerCase()));
             
-            const matchesTag = selectedTag ? (item.tags && item.tags.includes(selectedTag)) : true;
+            const matchesTags = selectedTags.size > 0 
+                ? Array.from(selectedTags).some(tag => item.tags && item.tags.includes(tag))
+                : true;
             const matchesCategory = selectedCategory ? (item.category === selectedCategory || (!item.category && selectedCategory === '未分類')) : true;
             
-            return matchesSearch && matchesTag && matchesCategory;
+            return matchesSearch && matchesTags && matchesCategory;
         });
 
         if (sortBy === 'title') {
@@ -132,7 +137,7 @@ export const SavedPages: React.FC<SavedPagesProps> = ({ onSelectUrl, className }
     };
 
     processItems();
-  }, [items, searchQuery, sortBy, selectedTag, selectedCategory]);
+  }, [items, searchQuery, sortBy, selectedTags, selectedCategory]);
 
   // Actions
   const handleDelete = async (e: React.MouseEvent, url: string) => {
@@ -203,7 +208,16 @@ export const SavedPages: React.FC<SavedPagesProps> = ({ onSelectUrl, className }
           if (item) {
               const currentTags = item.tags || [];
               if (!currentTags.includes(newTag.trim())) {
-                  await updateItemTags(url, [...currentTags, newTag.trim()]);
+                  const settings = await chrome.storage.local.get(['geminiApiKey', 'embeddingModel']);
+                  const apiKey = settings.geminiApiKey as string;
+                  const modelName = (settings.embeddingModel as string) || 'models/embedding-001';
+                  
+                  await updateItemMetadataWithRegeneration(
+                      url, 
+                      { tags: [...currentTags, newTag.trim()] }, 
+                      apiKey, 
+                      modelName
+                  );
               }
           }
       }
@@ -223,7 +237,16 @@ export const SavedPages: React.FC<SavedPagesProps> = ({ onSelectUrl, className }
           if (item && item.tags) {
               const updatedTags = item.tags.filter(t => t !== tagToRemove.trim());
               if (updatedTags.length !== item.tags.length) {
-                  await updateItemTags(url, updatedTags);
+                  const settings = await chrome.storage.local.get(['geminiApiKey', 'embeddingModel']);
+                  const apiKey = settings.geminiApiKey as string;
+                  const modelName = (settings.embeddingModel as string) || 'models/embedding-001';
+
+                  await updateItemMetadataWithRegeneration(
+                      url, 
+                      { tags: updatedTags }, 
+                      apiKey, 
+                      modelName
+                  );
               }
           }
       }
@@ -250,7 +273,16 @@ export const SavedPages: React.FC<SavedPagesProps> = ({ onSelectUrl, className }
           const currentTags = item.tags || [];
           if (!currentTags.includes(newTag.trim())) {
               const updatedTags = [...currentTags, newTag.trim()];
-              await updateItemTags(item.url, updatedTags);
+              const settings = await chrome.storage.local.get(['geminiApiKey', 'embeddingModel']);
+              const apiKey = settings.geminiApiKey as string;
+              const modelName = (settings.embeddingModel as string) || 'models/embedding-001';
+
+              await updateItemMetadataWithRegeneration(
+                  item.url, 
+                  { tags: updatedTags }, 
+                  apiKey, 
+                  modelName
+              );
               loadItems(); 
               chrome.runtime.sendMessage({ type: 'VECTOR_UPDATED' });
           }
@@ -263,7 +295,16 @@ export const SavedPages: React.FC<SavedPagesProps> = ({ onSelectUrl, className }
       if (newTag && newTag.trim() && newTag.trim() !== oldTag) {
           const currentTags = item.tags || [];
           const updatedTags = currentTags.map(t => t === oldTag ? newTag.trim() : t);
-          await updateItemTags(item.url, updatedTags);
+          const settings = await chrome.storage.local.get(['geminiApiKey', 'embeddingModel']);
+          const apiKey = settings.geminiApiKey as string;
+          const modelName = (settings.embeddingModel as string) || 'models/embedding-001';
+
+          await updateItemMetadataWithRegeneration(
+              item.url, 
+              { tags: updatedTags }, 
+              apiKey, 
+              modelName
+          );
           loadItems();
           chrome.runtime.sendMessage({ type: 'VECTOR_UPDATED' });
       }
@@ -271,15 +312,62 @@ export const SavedPages: React.FC<SavedPagesProps> = ({ onSelectUrl, className }
 
   const handleTagClick = (e: React.MouseEvent, tag: string) => {
       e.stopPropagation();
-      setSelectedTag(tag);
+      const newSelected = new Set(selectedTags);
+      if (newSelected.has(tag)) {
+          newSelected.delete(tag);
+      } else {
+          newSelected.add(tag);
+      }
+      setSelectedTags(newSelected);
   };
 
   const handleRemoveTag = async (item: VectorItem, tagToRemove: string) => {
       if (!await showConfirm(`タグ "${tagToRemove}" を削除しますか？`)) return;
       const updatedTags = (item.tags || []).filter(t => t !== tagToRemove);
-      await updateItemTags(item.url, updatedTags);
+      
+      const settings = await chrome.storage.local.get(['geminiApiKey', 'embeddingModel']);
+      const apiKey = settings.geminiApiKey as string;
+      const modelName = (settings.embeddingModel as string) || 'models/embedding-001';
+
+      await updateItemMetadataWithRegeneration(
+          item.url, 
+          { tags: updatedTags }, 
+          apiKey, 
+          modelName
+      );
       loadItems();
       chrome.runtime.sendMessage({ type: 'VECTOR_UPDATED' });
+  };
+
+  const handleEditNotes = async (e: React.MouseEvent, item: VectorItem) => {
+      e.stopPropagation();
+      setActiveNoteItem(item);
+  };
+
+  const handleSaveNotes = async (url: string, newNotes: string) => {
+      const item = items.find(i => i.url === url);
+      if (!item || newNotes === item.notes) return;
+
+      setIsLoading(true);
+      try {
+          const settings = await chrome.storage.local.get(['geminiApiKey', 'embeddingModel']);
+          const apiKey = settings.geminiApiKey as string;
+          const modelName = (settings.embeddingModel as string) || 'models/embedding-001';
+
+          await updateItemMetadataWithRegeneration(
+              url, 
+              { notes: newNotes.trim() }, 
+              apiKey, 
+              modelName
+          );
+          loadItems();
+          chrome.runtime.sendMessage({ type: 'VECTOR_UPDATED' });
+          setActiveNoteItem(null); // Close panel on success
+      } catch(e) {
+          console.error(e);
+      } finally {
+          setIsLoading(false);
+      }
   };
 
   const handleClearAll = async () => {
@@ -378,7 +466,16 @@ export const SavedPages: React.FC<SavedPagesProps> = ({ onSelectUrl, className }
                 const uniqueNewTags = [...new Set(newTags)];
                 
                 if (changed || uniqueNewTags.length !== item.tags.length) {
-                    await updateItemTags(item.url, uniqueNewTags);
+                    const settings = await chrome.storage.local.get(['geminiApiKey', 'embeddingModel']);
+                    const apiKey = settings.geminiApiKey as string;
+                    const modelName = (settings.embeddingModel as string) || 'models/embedding-001';
+
+                    await updateItemMetadataWithRegeneration(
+                        item.url, 
+                        { tags: uniqueNewTags }, 
+                        apiKey, 
+                        modelName
+                    );
                     updateCount++;
                 }
             }
@@ -453,6 +550,13 @@ export const SavedPages: React.FC<SavedPagesProps> = ({ onSelectUrl, className }
                         >
                             <FolderOpen size={10} />
                             AIカテゴリ {showCategories ? 'を閉じる' : 'を表示'}
+                        </button>
+                        <button 
+                            onClick={() => setShowTags(!showTags)}
+                            className={`flex items-center gap-1.5 px-2 py-0.5 rounded-md text-[10px] font-bold transition-all border ${showTags ? 'bg-blue-600/20 text-blue-400 border-blue-500/30 shadow-[0_0_10px_rgba(59,130,246,0.2)]' : 'bg-slate-800 text-slate-400 border-slate-700 hover:border-blue-500/40'}`}
+                        >
+                            <TagIcon size={10} />
+                            タグ一覧 {showTags ? 'を閉じる' : 'を表示'}
                         </button>
                     </div>
                 </div>
@@ -532,6 +636,54 @@ export const SavedPages: React.FC<SavedPagesProps> = ({ onSelectUrl, className }
           </div>
         )}
 
+        {/* Collapsible Tags Panel */}
+        {showTags && allTags.length > 0 && (
+          <div className="bg-slate-900/80 border border-blue-500/20 rounded-xl p-4 animate-in fade-in slide-in-from-top-2 duration-200 shadow-xl backdrop-blur-sm">
+            <div className="flex items-center justify-between mb-3 px-1">
+              <div className="flex items-center gap-2">
+                <TagIcon size={12} className="text-blue-400" />
+                <span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Filter by Tags (OR Selection)</span>
+              </div>
+              <div className="flex items-center gap-3">
+                <button 
+                    onClick={handleOrganizeTags}
+                    className="flex items-center gap-1 text-[10px] text-purple-400 hover:text-purple-300 transition-colors font-bold"
+                >
+                    <Wand2 size={10} />
+                    タグを整理
+                </button>
+                {selectedTags.size > 0 && (
+                    <button 
+                    onClick={() => setSelectedTags(new Set())}
+                    className="text-[10px] text-blue-400 hover:text-blue-300 font-bold"
+                    >
+                    フィルターリセット
+                    </button>
+                )}
+              </div>
+            </div>
+            <div className="flex flex-wrap gap-2">
+                {allTags.map(tag => (
+                    <button
+                        key={tag.name}
+                        onClick={() => {
+                            const newTags = new Set(selectedTags);
+                            if (newTags.has(tag.name)) newTags.delete(tag.name);
+                            else newTags.add(tag.name);
+                            setSelectedTags(newTags);
+                        }}
+                        className={`px-3 py-1.5 rounded-lg text-[11px] border transition-all ${selectedTags.has(tag.name) 
+                            ? 'bg-blue-600 text-white border-blue-500 shadow-lg shadow-blue-900/40 font-bold' 
+                            : 'bg-slate-950/50 text-slate-400 border-slate-800 hover:border-slate-700'
+                        }`}
+                    >
+                        {tag.name} <span className={`ml-1 text-[9px] ${selectedTags.has(tag.name) ? 'text-blue-200' : 'text-slate-500'}`}>({tag.count})</span>
+                    </button>
+                ))}
+            </div>
+          </div>
+        )}
+
         {/* Bulk Actions & Search Bar Area */}
         <div className="space-y-3">
             {selectedItems.size > 0 && (
@@ -601,32 +753,23 @@ export const SavedPages: React.FC<SavedPagesProps> = ({ onSelectUrl, className }
           </div>
         </div>
 
-        {/* Tag Cloud / Filter */}
-        {allTags.length > 0 && (
+        {/* Active Filters Display */}
+        {(selectedTags.size > 0 || selectedCategory) && (
             <div className="flex flex-wrap gap-2 pt-2 border-t border-slate-800/50">
-                <div className="flex items-center justify-between w-full mb-1">
-                    <div className="text-[10px] text-slate-500 font-bold uppercase tracking-wider flex items-center gap-1">
-                        <TagIcon size={10} />
-                        Tags:
-                    </div>
-                    <button 
-                        onClick={handleOrganizeTags}
-                        className="flex items-center gap-1 text-[10px] text-purple-400 hover:text-purple-300 transition-colors"
-                        title="タグをAIで整理"
-                    >
-                        <Wand2 size={10} />
-                        タグ整理
-                    </button>
-                </div>
-                {selectedTag && (
-                    <button 
-                        onClick={() => setSelectedTag(null)}
-                        className="flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] bg-blue-600 text-white hover:bg-blue-500 transition-colors"
-                    >
-                        <Plus size={10} className="rotate-45" />
-                        Tag Filter: {selectedTag}
-                    </button>
-                )}
+                {Array.from(selectedTags).map(tag => (
+                   <button 
+                       key={tag}
+                       onClick={() => {
+                           const newTags = new Set(selectedTags);
+                           newTags.delete(tag);
+                           setSelectedTags(newTags);
+                       }}
+                       className="flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] bg-blue-600 text-white hover:bg-blue-500 transition-colors"
+                   >
+                       <Plus size={10} className="rotate-45" />
+                       Tag: {tag}
+                   </button>
+                ))}
                 {selectedCategory && (
                     <button 
                         onClick={() => setSelectedCategory(null)}
@@ -636,18 +779,12 @@ export const SavedPages: React.FC<SavedPagesProps> = ({ onSelectUrl, className }
                         AI Category: {selectedCategory}
                     </button>
                 )}
-                {allTags.map(tag => (
-                    <button
-                        key={tag.name}
-                        onClick={() => setSelectedTag(selectedTag === tag.name ? null : tag.name)}
-                        className={`px-2 py-0.5 rounded-full text-[10px] border transition-all ${selectedTag === tag.name 
-                            ? 'bg-blue-500/20 border-blue-500/50 text-blue-300' 
-                            : 'bg-slate-900 border-slate-700 text-slate-400 hover:border-slate-500 hover:text-slate-300'
-                        }`}
-                    >
-                        {tag.name} <span className="opacity-50 ml-0.5">({tag.count})</span>
-                    </button>
-                ))}
+                <button 
+                    onClick={() => { setSelectedTags(new Set()); setSelectedCategory(null); }}
+                    className="text-[10px] text-slate-500 hover:text-slate-300 underline ml-auto"
+                >
+                    フィルターを全クリア
+                </button>
             </div>
         )}
       </div>
@@ -684,6 +821,7 @@ export const SavedPages: React.FC<SavedPagesProps> = ({ onSelectUrl, className }
                     onRemoveTag={handleRemoveTag}
                     onEditTag={handleEditTag}
                     onTagClick={handleTagClick}
+                    onEditNotes={handleEditNotes}
                     tagCounts={tagCountMap}
                 />
             ))}
@@ -703,6 +841,7 @@ export const SavedPages: React.FC<SavedPagesProps> = ({ onSelectUrl, className }
                     onRemoveTag={handleRemoveTag}
                     onEditTag={handleEditTag}
                     onTagClick={handleTagClick}
+                    onEditNotes={handleEditNotes}
                     tagCounts={tagCountMap}
                 />
             ))}
@@ -720,6 +859,14 @@ export const SavedPages: React.FC<SavedPagesProps> = ({ onSelectUrl, className }
       <AutoOrganizeModal 
         isOpen={isOrganizeOpen}
         onClose={() => setIsOrganizeOpen(false)}
+      />
+
+      <NotepadPanel 
+        item={activeNoteItem}
+        isOpen={!!activeNoteItem}
+        onClose={() => setActiveNoteItem(null)}
+        onSave={handleSaveNotes}
+        isLoading={isLoading}
       />
     </div>
   );

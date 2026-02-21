@@ -81,7 +81,7 @@ function App() {
             <div>
                 <h1 className="text-lg font-bold text-slate-100 tracking-tight leading-none">Twin Marks</h1>
                 <div className="flex items-center gap-2 mt-0.5">
-                    <span className="text-[10px] text-slate-500 font-mono">v1.3.0</span>
+                    <span className="text-[10px] text-slate-500 font-mono">v1.3.1</span>
                     <span className="text-[10px] px-1.5 py-0.5 rounded bg-emerald-500/10 text-emerald-500 border border-emerald-500/20 font-medium">デュアル検索</span>
                 </div>
             </div>

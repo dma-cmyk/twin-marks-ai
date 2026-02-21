@@ -1,5 +1,5 @@
 import React from 'react';
-import { ExternalLink, CheckSquare, Square, Trash2, Plus, X, Pencil } from 'lucide-react';
+import { ExternalLink, CheckSquare, Square, Trash2, Plus, X, Pencil, MessageSquareText } from 'lucide-react';
 
 export interface VectorItem {
   url: string;
@@ -9,6 +9,7 @@ export interface VectorItem {
   description?: string;
   isSaved?: boolean;
   tags?: string[];
+  notes?: string;
   category?: string;
 }
 
@@ -23,6 +24,7 @@ interface ItemProps {
     onRemoveTag: (item: VectorItem, tag: string) => void;
     onEditTag: (e: React.MouseEvent, item: VectorItem, tag: string) => void;
     onTagClick: (e: React.MouseEvent, tag: string) => void;
+    onEditNotes: (e: React.MouseEvent, item: VectorItem) => void;
     tagCounts?: Record<string, number>;
 }
 
@@ -57,7 +59,7 @@ export const TagBadge: React.FC<{
     </span>
 );
 
-export const ListViewItem: React.FC<ItemProps> = ({ item, selected, onToggle, onSelect, onOpen, onDelete, onAddTag, onRemoveTag, onEditTag, onTagClick, tagCounts }) => (
+export const ListViewItem: React.FC<ItemProps> = ({ item, selected, onToggle, onSelect, onOpen, onDelete, onAddTag, onRemoveTag, onEditTag, onTagClick, onEditNotes, tagCounts }) => (
     <div 
         onClick={() => onSelect(item.url)} 
         className={`group flex items-center gap-4 p-3 border rounded-xl transition-all cursor-pointer shadow-sm relative overflow-hidden ${selected 
@@ -89,6 +91,21 @@ export const ListViewItem: React.FC<ItemProps> = ({ item, selected, onToggle, on
                 )}
             </div>
             <div className="text-[10px] text-slate-500 truncate font-mono mt-0.5 opacity-60">{item.url}</div>
+            
+            {item.notes && (
+                <div 
+                    onClick={(e) => { e.stopPropagation(); onEditNotes(e, item); }}
+                    className="mt-2 px-3 py-2 bg-slate-950 border-l-4 border-blue-500 text-[10px] text-blue-400/80 font-mono whitespace-pre-wrap line-clamp-2 shadow-inner hover:bg-slate-900 transition-all cursor-text rounded-r-md group/note overflow-hidden relative"
+                >
+                    <div className="absolute top-0 right-0 p-1 opacity-0 group-hover/note:opacity-100 transition-opacity">
+                        <Pencil size={8} className="text-blue-500" />
+                    </div>
+                    <span className="text-slate-600 mr-2 select-none">/*</span>
+                    {item.notes}
+                    <span className="text-slate-600 ml-2 select-none">*/</span>
+                </div>
+            )}
+
             <div className="flex flex-wrap gap-1 mt-1.5 items-center">
                 {(item.tags || []).map(tag => (
                     <TagBadge 
@@ -111,13 +128,14 @@ export const ListViewItem: React.FC<ItemProps> = ({ item, selected, onToggle, on
         </div>
 
         <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+            <button onClick={(e) => onEditNotes(e, item)} className={`p-2 hover:bg-slate-800 rounded-lg transition-colors ${item.notes ? 'text-blue-400' : 'text-slate-600 hover:text-blue-400'}`} title="メモを編集"><MessageSquareText size={16} /></button>
             <button onClick={(e) => onOpen(e, item.url)} className="p-2 text-slate-600 hover:text-blue-400 hover:bg-slate-800 rounded-lg transition-colors"><ExternalLink size={16} /></button>
             <button onClick={(e) => onDelete(e, item.url)} className="p-2 text-slate-600 hover:text-rose-400 hover:bg-rose-500/10 rounded-lg transition-colors" title="削除"><Trash2 size={16} /></button>
         </div>
     </div>
 );
 
-export const GridViewItem: React.FC<ItemProps> = ({ item, selected, onToggle, onSelect, onOpen, onDelete, onAddTag, onRemoveTag, onEditTag, onTagClick, tagCounts }) => (
+export const GridViewItem: React.FC<ItemProps> = ({ item, selected, onToggle, onSelect, onOpen, onDelete, onAddTag, onRemoveTag, onEditTag, onTagClick, onEditNotes, tagCounts }) => (
     <div 
         onClick={() => onSelect(item.url)} 
         className={`group flex flex-col p-4 border rounded-2xl transition-all cursor-pointer shadow-lg relative overflow-hidden ${selected
@@ -150,6 +168,7 @@ export const GridViewItem: React.FC<ItemProps> = ({ item, selected, onToggle, on
                 </div>
             )}
             <div className="absolute bottom-3 right-3 flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                <button onClick={(e) => onEditNotes(e, item)} className={`p-1.5 bg-slate-800 rounded-lg hover:bg-slate-700 transition-colors ${item.notes ? 'text-blue-400' : 'text-slate-400 hover:text-blue-400'}`} title="メモを編集"><MessageSquareText size={14} /></button>
                 <button onClick={(e) => onOpen(e, item.url)} className="p-1.5 bg-slate-800 text-slate-400 hover:text-blue-400 rounded-lg hover:bg-slate-700 transition-colors"><ExternalLink size={14} /></button>
                 <button onClick={(e) => onDelete(e, item.url)} className="p-1.5 bg-slate-800 text-slate-400 hover:text-rose-400 rounded-lg hover:bg-rose-500/20 transition-colors"><Trash2 size={14} /></button>
             </div>
@@ -158,6 +177,21 @@ export const GridViewItem: React.FC<ItemProps> = ({ item, selected, onToggle, on
         <div className="flex-1 flex flex-col">
             <h3 className="text-sm font-bold line-clamp-2 leading-tight group-hover:text-blue-400 transition-colors mb-2 text-slate-300">{item.title}</h3>
             {item.description && <p className="text-[11px] text-slate-500 line-clamp-3 mb-2 flex-1 leading-relaxed">{item.description}</p>}
+            
+            {item.notes && (
+                <div 
+                    onClick={(e) => { e.stopPropagation(); onEditNotes(e, item); }}
+                    className="mb-3 px-3 py-2 bg-slate-950 border-l-4 border-blue-500 text-[10px] text-blue-400/80 font-mono rounded-r-md shadow-inner hover:bg-slate-900 transition-all cursor-text group/note relative overflow-hidden"
+                >
+                    <div className="absolute top-0 right-0 p-1 opacity-0 group-hover/note:opacity-100 transition-opacity">
+                        <Pencil size={8} className="text-blue-500" />
+                    </div>
+                    <div className="line-clamp-4 whitespace-pre-wrap leading-relaxed">
+                        <span className="text-slate-600 mr-1 select-none">//</span>
+                        {item.notes}
+                    </div>
+                </div>
+            )}
             
             <div className="flex flex-wrap gap-1 mb-2 items-center">
                 {(item.tags || []).map(tag => (

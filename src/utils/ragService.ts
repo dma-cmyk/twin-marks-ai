@@ -52,7 +52,7 @@ export const generateRAGAnswer = async (
               filteredContextItems = ranked.slice(0, 7).map((v: any) => ({
                  title: v.title,
                  url: v.url,
-                 content: v.textContent || v.description || 'No content available',
+                 content: `${v.notes ? `[User Note: ${v.notes}]\n` : ''}${v.textContent || v.description || 'No content available'}`,
                  score: v.score,
                  category: v.category
               }));
@@ -69,7 +69,7 @@ export const generateRAGAnswer = async (
         return {
           title: res.title,
           url: res.url,
-          content: (fullData as any)?.textContent || res.description || 'No content available',
+          content: `${(fullData as any)?.notes ? `[User Note: ${(fullData as any).notes}]\n` : ''}${(fullData as any)?.textContent || res.description || 'No content available'}`,
           score: res.score
         };
       });
