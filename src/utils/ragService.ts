@@ -14,7 +14,7 @@ export const generateRAGAnswer = async (
   searchResults: SearchResult[], // 通常の全件検索結果
   apiKey: string,
   modelName: string = 'models/gemini-2.5-flash-lite',
-  embeddingModelName: string = 'models/embedding-001',
+  embeddingModelName: string = 'models/gemini-embedding-001',
   skipCategorySelection: boolean = false
 ): Promise<RAGAnswer> => {
   if (!apiKey) throw new Error('API Key is missing');

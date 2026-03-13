@@ -208,7 +208,7 @@ export const updateItemMetadataWithRegeneration = async (
     url: string, 
     metadata: { tags?: string[], notes?: string },
     apiKey: string,
-    modelName: string = 'models/embedding-001'
+    modelName: string = 'models/gemini-embedding-001'
 ) => {
     const normUrl = normalizeUrl(url);
     const db = await initDB();
