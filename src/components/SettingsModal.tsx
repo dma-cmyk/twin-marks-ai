@@ -21,7 +21,7 @@ interface AppSettings {
 export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose }) => {
   const [settings, setSettings] = useState<AppSettings>({
     apiKey: '',
-    embeddingModel: 'models/embedding-001',
+    embeddingModel: 'models/gemini-embedding-001',
     generationModel: 'models/gemini-2.5-flash-lite',
     extractionEngine: 'defuddle',
     notifyUnanalyzed: true,
@@ -32,7 +32,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose })
   const [isLoading, setIsLoading] = useState(false);
   const [statusMsg, setStatusMsg] = useState('');
   const [genModels, setGenModels] = useState<string[]>(['models/gemini-2.5-flash-lite', 'models/gemini-1.5-flash', 'models/gemini-1.5-pro']);
-  const [embedModels, setEmbedModels] = useState<string[]>(['models/embedding-001', 'models/text-embedding-004']);
+  const [embedModels, setEmbedModels] = useState<string[]>(['models/gemini-embedding-001', 'models/text-embedding-004']);
 
   useEffect(() => {
     // Load settings and model lists from storage
@@ -53,7 +53,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose })
 
       setSettings({
         apiKey: (result.geminiApiKey as string) || '',
-        embeddingModel: (result.embeddingModel as string) || 'models/embedding-001',
+        embeddingModel: (result.embeddingModel as string) || 'models/gemini-embedding-001',
         generationModel: (result.generationModel as string) || 'models/gemini-2.5-flash-lite',
         extractionEngine: (result.extractionEngine as 'defuddle' | 'turndown') || 'defuddle',
         notifyUnanalyzed: result.notifyUnanalyzed !== undefined ? (result.notifyUnanalyzed as boolean) : true,
