@@ -37,7 +37,7 @@ export const TagBadge: React.FC<{
 }> = ({ tag, onRemove, onEdit, onClick, count }) => (
     <span 
         onClick={(e) => onClick(e, tag)}
-        className="group/tag inline-flex items-center gap-1 text-[9px] px-1.5 py-0.5 rounded-sm bg-slate-800 text-slate-400 border border-slate-700/50 hover:border-blue-500/30 transition-colors cursor-pointer"
+        className="group/tag inline-flex items-center gap-1.5 text-[11px] px-2 py-1 rounded-md bg-slate-800/80 text-slate-200 border border-slate-600 hover:border-blue-400 font-medium transition-colors cursor-pointer shadow-sm"
     >
         #{tag}{count !== undefined && <span className="opacity-50 ml-0.5">({count})</span>}
         <div className="hidden group-hover/tag:flex items-center gap-0.5 ml-1">
@@ -119,10 +119,10 @@ export const ListViewItem: React.FC<ItemProps> = ({ item, selected, onToggle, on
                 ))}
                 <button 
                     onClick={(e) => onAddTag(e, item)}
-                    className="text-[9px] px-1.5 py-0.5 rounded-sm bg-slate-800/50 text-slate-500 hover:text-blue-400 hover:bg-slate-800 border border-transparent hover:border-blue-500/30 transition-all"
+                    className="text-[11px] px-2 py-1 rounded-md bg-slate-800/50 text-slate-400 hover:text-blue-400 hover:bg-slate-800 border border-transparent hover:border-blue-500/50 transition-all"
                     title="タグを追加"
                 >
-                    <Plus size={10} />
+                    <Plus size={12} />
                 </button>
             </div>
         </div>
@@ -206,10 +206,10 @@ export const GridViewItem: React.FC<ItemProps> = ({ item, selected, onToggle, on
                 ))}
                 <button 
                     onClick={(e) => onAddTag(e, item)}
-                    className="text-[9px] px-1.5 py-0.5 rounded-sm bg-slate-800/50 text-slate-500 hover:text-blue-400 hover:bg-slate-800 border border-transparent hover:border-blue-500/30 transition-all opacity-0 group-hover:opacity-100"
+                    className="text-[11px] px-2 py-1 rounded-md bg-slate-800/50 text-slate-400 hover:text-blue-400 hover:bg-slate-800 border border-transparent hover:border-blue-500/50 transition-all opacity-0 group-hover:opacity-100"
                     title="タグを追加"
                 >
-                    <Plus size={10} />
+                    <Plus size={12} />
                 </button>
             </div>
 

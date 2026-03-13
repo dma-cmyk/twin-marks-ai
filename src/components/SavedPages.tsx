@@ -11,6 +11,7 @@ import { TagOptimizationModal } from './TagOptimizationModal'; // Import
 import { AutoOrganizeModal } from './AutoOrganizeModal';
 import { NotepadPanel } from './SavedPages/NotepadPanel';
 import { syncCategories } from '../utils/categoryService';
+import { BulkTagModal } from './BulkTagModal';
 
 const { cosine } = similarity;
 
@@ -40,6 +41,8 @@ export const SavedPages: React.FC<SavedPagesProps> = ({ onSelectUrl, className }
   // Modal & Sync States
   const [isTagModalOpen, setIsTagModalOpen] = useState(false);
   const [isOrganizeOpen, setIsOrganizeOpen] = useState(false);
+  const [isBulkTagModalOpen, setIsBulkTagModalOpen] = useState(false);
+  const [bulkTagMode, setBulkTagMode] = useState<'add' | 'remove' | 'edit'>('add');
   const [isSyncing, setIsSyncing] = useState(false);
   const [tagMapping, setTagMapping] = useState<Record<string, string>>({});
 
@@ -198,60 +201,89 @@ export const SavedPages: React.FC<SavedPagesProps> = ({ onSelectUrl, className }
       }
   };
 
-  const handleBulkAddTag = async () => {
-      const newTag = await showPrompt('選択したアイテムに追加するタグを入力してください:');
-      if (!newTag || !newTag.trim()) return;
-      
-      setIsLoading(true);
-      for (const url of selectedItems) {
-          const item = items.find(i => i.url === url);
-          if (item) {
-              const currentTags = item.tags || [];
-              if (!currentTags.includes(newTag.trim())) {
-                  const settings = await chrome.storage.local.get(['geminiApiKey', 'embeddingModel']);
-                  const apiKey = settings.geminiApiKey as string;
-                  const modelName = (settings.embeddingModel as string) || 'models/embedding-001';
-                  
-                  await updateItemMetadataWithRegeneration(
-                      url, 
-                      { tags: [...currentTags, newTag.trim()] }, 
-                      apiKey, 
-                      modelName
-                  );
-              }
-          }
-      }
-      loadItems();
-      chrome.runtime.sendMessage({ type: 'VECTOR_UPDATED' });
+  const handleBulkAddTag = () => {
+      setBulkTagMode('add');
+      setIsBulkTagModalOpen(true);
   };
 
-  const handleBulkRemoveTag = async () => {
-      const tagToRemove = await showPrompt('選択したアイテムから削除するタグを入力してください:');
-      if (!tagToRemove || !tagToRemove.trim()) return;
+  const handleBulkRemoveTag = () => {
+      setBulkTagMode('remove');
+      setIsBulkTagModalOpen(true);
+  };
 
-      if (!await showConfirm(`選択した ${selectedItems.size} 件のアイテムからタグ "${tagToRemove}" を削除しますか？`)) return;
+  const handleBulkEditTag = () => {
+      setBulkTagMode('edit');
+      setIsBulkTagModalOpen(true);
+  };
 
+  const handleBulkTagConfirm = async (tags: string[], newTagName?: string) => {
+      if (tags.length === 0) return;
+      
       setIsLoading(true);
-      for (const url of selectedItems) {
-          const item = items.find(i => i.url === url);
-          if (item && item.tags) {
-              const updatedTags = item.tags.filter(t => t !== tagToRemove.trim());
-              if (updatedTags.length !== item.tags.length) {
-                  const settings = await chrome.storage.local.get(['geminiApiKey', 'embeddingModel']);
-                  const apiKey = settings.geminiApiKey as string;
-                  const modelName = (settings.embeddingModel as string) || 'models/embedding-001';
+      
+      try {
+          const settings = await chrome.storage.local.get(['geminiApiKey', 'embeddingModel']);
+          const apiKey = settings.geminiApiKey as string;
+          const modelName = (settings.embeddingModel as string) || 'models/embedding-001';
 
-                  await updateItemMetadataWithRegeneration(
-                      url, 
-                      { tags: updatedTags }, 
-                      apiKey, 
-                      modelName
-                  );
+          let updateCount = 0;
+          for (const url of selectedItems) {
+              const item = items.find(i => i.url === url);
+              if (item) {
+                  const currentTags = item.tags || [];
+                  let updatedTags = [...currentTags];
+                  let changed = false;
+
+                  if (bulkTagMode === 'add') {
+                      tags.forEach(tag => {
+                          if (!updatedTags.includes(tag)) {
+                              updatedTags.push(tag);
+                              changed = true;
+                          }
+                      });
+                  } else if (bulkTagMode === 'remove') {
+                      tags.forEach(tag => {
+                          if (updatedTags.includes(tag)) {
+                              updatedTags = updatedTags.filter(t => t !== tag);
+                              changed = true;
+                          }
+                      });
+                  } else if (bulkTagMode === 'edit' && newTagName) {
+                      const oldTag = tags[0]; // edit mode passes exactly 1 old tag
+                      if (updatedTags.includes(oldTag)) {
+                          // Remove old tag and add new tag
+                          updatedTags = updatedTags.filter(t => t !== oldTag);
+                          if (!updatedTags.includes(newTagName)) {
+                              updatedTags.push(newTagName);
+                          }
+                          changed = true;
+                      }
+                  }
+
+                  if (changed) {
+                      await updateItemMetadataWithRegeneration(
+                          url, 
+                          { tags: updatedTags }, 
+                          apiKey, 
+                          modelName
+                      );
+                      updateCount++;
+                  }
               }
           }
+          
+          if (updateCount > 0) {
+              await showAlert(`${updateCount} 件のアイテムのタグを更新しました。`);
+          }
+      } catch (e) {
+          console.error(e);
+          await showAlert('タグの更新中にエラーが発生しました。');
+      } finally {
+          setIsLoading(false);
+          loadItems();
+          chrome.runtime.sendMessage({ type: 'VECTOR_UPDATED' });
+          setSelectedItems(new Set());
       }
-      loadItems();
-      chrome.runtime.sendMessage({ type: 'VECTOR_UPDATED' });
   };
 
   const handleBulkDelete = async () => {
@@ -698,6 +730,9 @@ export const SavedPages: React.FC<SavedPagesProps> = ({ onSelectUrl, className }
                         <button onClick={handleBulkAddTag} className="flex items-center gap-1.5 px-3 py-1.5 bg-blue-600 hover:bg-blue-500 text-white text-xs font-bold rounded-lg transition-all">
                             <Plus size={14} /> タグ追加
                         </button>
+                        <button onClick={handleBulkEditTag} className="flex items-center gap-1.5 px-3 py-1.5 bg-purple-600 hover:bg-purple-500 text-white text-xs font-bold rounded-lg transition-all">
+                            <Wand2 size={14} /> タグ編集
+                        </button>
                         <button onClick={handleBulkRemoveTag} className="flex items-center gap-1.5 px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-bold rounded-lg transition-all">
                             <Minus size={14} /> タグ削除
                         </button>
@@ -710,6 +745,25 @@ export const SavedPages: React.FC<SavedPagesProps> = ({ onSelectUrl, className }
             )}
 
             <div className="flex items-center justify-between gap-4">
+            {displayItems.length > 0 && (
+                <div className="flex bg-slate-900 border border-slate-800 rounded-lg p-0.5 shrink-0">
+                    <button 
+                        onClick={() => setSelectedItems(new Set(displayItems.map(i => i.url)))}
+                        className={`px-3 py-1.5 rounded-md text-[10px] font-bold transition-all ${selectedItems.size === displayItems.length ? 'bg-blue-600/20 text-blue-400' : 'text-slate-500 hover:text-slate-300'}`}
+                        title="表示中のすべてを選択"
+                    >
+                        すべて選択
+                    </button>
+                    <button 
+                        onClick={() => setSelectedItems(new Set())}
+                        className={`px-3 py-1.5 rounded-md text-[10px] font-bold transition-all ${selectedItems.size === 0 ? 'bg-slate-800 text-slate-400' : 'text-slate-500 hover:text-slate-300'}`}
+                        title="選択をすべて解除"
+                    >
+                        すべて解除
+                    </button>
+                </div>
+            )}
+
             <div className="relative flex-1 max-w-md">
               <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-600" size={12} />
               <input 
@@ -859,6 +913,15 @@ export const SavedPages: React.FC<SavedPagesProps> = ({ onSelectUrl, className }
       <AutoOrganizeModal 
         isOpen={isOrganizeOpen}
         onClose={() => setIsOrganizeOpen(false)}
+      />
+
+      <BulkTagModal
+        isOpen={isBulkTagModalOpen}
+        onClose={() => setIsBulkTagModalOpen(false)}
+        mode={bulkTagMode}
+        selectedCount={selectedItems.size}
+        allTags={allTags.map(t => t.name)}
+        onConfirm={handleBulkTagConfirm}
       />
 
       <NotepadPanel 
