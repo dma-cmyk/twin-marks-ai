@@ -3,6 +3,11 @@ import { storeVector, getVector } from '../utils/vectorStore';
 
 console.log('Twin Marks AI Background Script Loaded');
 
+// 起動時に解析状態をリセット（前回の異常終了対策）
+if (typeof chrome !== 'undefined' && chrome.storage) {
+    chrome.storage.local.set({ analyzing: false });
+}
+
 // アイコンクリック時にメイン画面を開く
 chrome.action.onClicked.addListener(() => {
   chrome.tabs.create({ url: 'index.html' });
@@ -54,7 +59,7 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
 
       const settings = await chrome.storage.local.get(['geminiApiKey', 'embeddingModel', 'generationModel', 'extractionEngine', 'useImageAnalysis']);
       const apiKey = settings.geminiApiKey as string;
-      const embedModelName = (settings.embeddingModel || 'models/embedding-001') as string;
+      const embedModelName = (settings.embeddingModel || 'models/gemini-embedding-001') as string;
       const genModelName = (settings.generationModel || 'models/gemini-2.5-flash-lite') as string;
       const engine = (settings.extractionEngine || 'defuddle') as 'defuddle' | 'turndown';
       const useImageAnalysis = settings.useImageAnalysis !== false; // Default true
@@ -200,8 +205,8 @@ ${text.substring(0, 5000)}`,
           
           const candidateModels = [
               embedModelName, 
-              'models/text-embedding-001',
-              'models/embedding-001'
+              'models/gemini-embedding-001',
+              'models/text-embedding-004'
           ];
           const uniqueModels = Array.from(new Set(candidateModels));
 
@@ -252,7 +257,7 @@ ${description}`,
               existingNotes ? `Notes: ${existingNotes}` : ''
           ].filter(Boolean).join('\n');
 
-          const candidateModels = [embedModelName, 'models/embedding-001'];
+          const candidateModels = [embedModelName, 'models/gemini-embedding-001'];
           for (const m of candidateModels) {
               try {
                   semanticVector = await getEmbedding(textToEmbed, apiKey, m);

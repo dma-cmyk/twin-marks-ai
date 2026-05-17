@@ -6,7 +6,7 @@ import { NetworkGraph } from './components/NetworkGraph';
 import { NetworkGraph3D } from './components/NetworkGraph3D';
 import { SavedPages } from './components/SavedPages';
 import { getTree } from './utils/bookmarkService';
-import { ExternalLink, Layout, Maximize2, Zap, Settings, BrainCircuit, Loader2, Network, List, Box, BookmarkCheck } from 'lucide-react';
+import { ExternalLink, Layout, Maximize2, Zap, Settings, BrainCircuit, Loader2, Network, List, Box, BookmarkCheck, RotateCcw } from 'lucide-react';
 import { Panel, Group as PanelGroup, Separator as PanelResizeHandle } from 'react-resizable-panels';
 
 function App() {
@@ -18,6 +18,13 @@ function App() {
   const [aiViewMode, setAiViewMode] = useState<'list' | 'graph' | 'graph3d'>('list');
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [analyzingTitle, setAnalyzingTitle] = useState('');
+
+  const resetAnalysis = () => {
+    if (typeof chrome !== 'undefined' && chrome.storage) {
+        chrome.storage.local.set({ analyzing: false });
+        setIsAnalyzing(false);
+    }
+  };
   
   useEffect(() => {
     document.documentElement.classList.add('dark');
@@ -141,9 +148,19 @@ function App() {
 
       {/* Analysis Status Banner */}
       {isAnalyzing && (
-          <div className="flex items-center justify-center gap-2 bg-blue-600/20 border-b border-blue-500/30 px-4 py-1 text-xs text-blue-200 animate-in slide-in-from-top-2">
-              <Loader2 size={12} className="animate-spin" />
-              <span>分析中: <span className="font-bold">{analyzingTitle}</span>...</span>
+          <div className="flex items-center justify-between gap-2 bg-blue-600/20 border-b border-blue-500/30 px-4 py-1 text-xs text-blue-200 animate-in slide-in-from-top-2">
+              <div className="flex items-center gap-2">
+                  <Loader2 size={12} className="animate-spin" />
+                  <span>分析中: <span className="font-bold">{analyzingTitle}</span>...</span>
+              </div>
+              <button 
+                  onClick={resetAnalysis}
+                  className="flex items-center gap-1 px-2 py-0.5 hover:bg-blue-500/30 rounded border border-blue-500/40 transition-colors"
+                  title="分析状態を強制リセット"
+              >
+                  <RotateCcw size={10} />
+                  <span>リセット</span>
+              </button>
           </div>
       )}
 
