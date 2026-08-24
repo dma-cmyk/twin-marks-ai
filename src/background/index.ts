@@ -92,7 +92,11 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
           try {
               await chrome.scripting.executeScript({
                   target: { tabId: tab.id },
-                  files: ['src/content/index.ts']
+                  // Vite/CRX fingerprints the bundled content-script filename, so
+                  // the TypeScript source path does not exist in an installed
+                  // extension. Keep this dependency-free fallback in public/ so
+                  // it is copied to a stable path in the extension package.
+                  files: ['public/content-extractor-fallback.js']
               });
               
               // 注入後に少し待機してから再試行
